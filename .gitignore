@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+data/projects/*.json
+data/exports/
+data/renders/
+data/references/
+data/secrets/
+build/
+dist/
+*.spec
+.acceptance/
+.env
+.env.local

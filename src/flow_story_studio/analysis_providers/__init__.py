@@ -1,0 +1,1 @@
+"""Pluggable story-analysis providers."""

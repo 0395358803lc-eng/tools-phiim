@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Flow Story Studio</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=1.8.1">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><span></span><span></span><span></span></div>
+        <div><strong>FLOW STORY</strong><small>CONTINUITY STUDIO</small></div>
+      </div>
+      <div class="project-heading">
+        <span class="eyebrow" id="workspaceLabel">PHIÊN LÀM VIỆC MỚI</span>
+        <h1 id="projectTitle">Chưa có dự án</h1>
+      </div>
+      <div class="top-actions">
+        <button class="status-pill" id="providerStatus" title="Mở thiết lập tạo video"><i></i> Thiết lập video</button>
+        <button class="ghost-btn" id="videoSetupBtn">Thiết lập video</button>
+        <button class="ghost-btn" id="openProjectsBtn">Mở đã lưu</button>
+        <button class="ghost-btn" id="exportBtn" disabled>Xuất project</button>
+        <button class="primary-btn compact" id="newProjectBtn">+ Dự án mới</button>
+      </div>
+    </header>
+
+    <nav class="workspace-switcher" id="workspaceSwitcher" aria-label="Chuyển vùng làm việc">
+      <button data-workspace-view="project"><span>01</span> Project</button>
+      <button class="active" data-workspace-view="storyboard"><span>02</span> Storyboard</button>
+      <button data-workspace-view="editor"><span>03</span> Scene editor</button>
+    </nav>
+
+    <main class="workspace empty" id="workspace" data-workspace-view="storyboard">
+      <aside class="panel project-panel">
+        <div class="panel-title"><span>01</span><h2>Project</h2></div>
+        <nav class="tab-strip" id="projectTabs">
+          <button class="active" data-tab="source">Nội dung</button>
+          <button data-tab="bible">Bible</button>
+          <button data-tab="settings">Cài đặt</button>
+        </nav>
+        <section class="tab-content active" data-panel="source">
+          <label class="field-label">Nội dung gốc</label>
+          <div class="source-preview empty-copy" id="sourcePreview">Nội dung câu chuyện sẽ xuất hiện tại đây sau khi phân tích.</div>
+          <div class="mini-stats">
+            <div><strong id="wordCount">0</strong><span>Từ</span></div>
+            <div><strong id="sceneCount">0</strong><span>Cảnh</span></div>
+            <div><strong id="totalDuration">0s</strong><span>Thời lượng</span></div>
+          </div>
+          <label class="field-label spaced">Master project prompt</label>
+          <div class="prompt-box" id="masterPrompt">—</div>
+        </section>
+        <section class="tab-content" data-panel="bible">
+          <div id="storyBible"></div>
+          <div class="section-heading"><span>Nhân vật</span><em id="characterCount">0</em></div>
+          <div class="bible-list" id="characterBible"></div>
+          <div class="section-heading"><span>Bối cảnh</span><em id="locationCount">0</em></div>
+          <div class="bible-list" id="locationBible"></div>
+          <div class="section-heading"><span>Đạo cụ</span><em id="propCount">0</em></div>
+          <div class="bible-list" id="propBible"></div>
+        </section>
+        <section class="tab-content" data-panel="settings">
+          <div class="settings-grid" id="settingsView"></div>
+          <label class="field-label spaced">Global visual style</label>
+          <div class="prompt-box" id="visualStyle">—</div>
+          <label class="field-label spaced">Timeline</label>
+          <ol class="timeline-list" id="timeline"></ol>
+        </section>
+      </aside>
+
+      <section class="panel storyboard-panel">
+        <div class="panel-title storyboard-title">
+          <div><span>02</span><h2>Storyboard</h2></div>
+          <button class="icon-btn" id="queueBtn" title="Mở hàng đợi">☷</button>
+        </div>
+        <div class="scene-toolbar">
+          <div class="search-wrap"><span>⌕</span><input id="sceneSearch" placeholder="Tìm scene..."></div>
+          <button class="filter-btn active" data-filter="all">Tất cả</button>
+          <button class="filter-btn" data-filter="warning">Cảnh báo</button>
+        </div>
+        <div class="scene-list empty-copy" id="sceneList">Tạo dự án để bắt đầu dựng storyboard.</div>
+      </section>
+
+      <section class="panel editor-panel">
+        <div class="panel-title editor-title">
+          <div><span>03</span><h2>Scene editor</h2></div>
+          <div class="editor-lock-tools"><button class="scene-lock-btn" id="sceneLockBtn" type="button" disabled>🔒 AI đã khóa</button><div class="scene-id" id="activeSceneId">—</div></div>
+        </div>
+        <nav class="editor-tabs" id="editorTabs">
+          <button class="active" data-editor-tab="edit">Biên tập</button>
+          <button data-editor-tab="prompt">Flow Prompt</button>
+          <button data-editor-tab="continuity">Continuity</button>
+          <button data-editor-tab="result">Kết quả</button>
+        </nav>
+        <div class="editor-scroll empty-copy" id="editorEmpty">Chọn một scene trong storyboard để biên tập.</div>
+        <form class="editor-scroll hidden" id="sceneForm">
+          <div class="ai-lock-banner" id="aiLockBanner"><strong>🔒 AI CONTINUITY LOCK</strong><span>Nhận dạng, bối cảnh và thông số hình ảnh đang được bảo vệ.</span></div>
+          <section class="editor-page active" data-editor-panel="edit">
+            <div class="form-row two">
+              <label><span>Location</span><select id="editLocation"></select></label>
+              <label><span>Thời lượng</span><input id="editDuration" type="number" min="4" max="30"></label>
+            </div>
+            <label><span>Nhân vật xuất hiện</span><select id="editCharacters" multiple size="3"></select></label>
+            <label><span>Nội dung cảnh</span><textarea id="editSource" rows="4"></textarea></label>
+            <label><span>Hành động</span><textarea id="editAction" rows="3"></textarea></label>
+            <label><span>Camera</span><input id="editCamera"></label>
+            <div class="form-row two">
+              <label><span>Ánh sáng</span><input id="editLighting"></label>
+              <label><span>Không khí</span><input id="editAtmosphere"></label>
+            </div>
+            <label><span>Voiceover</span><textarea id="editVoiceover" rows="4"></textarea></label>
+            <label><span>Dialogue (JSON)</span><textarea id="editDialogues" rows="4"></textarea></label>
+            <label><span>Reference image / last frame</span><input id="editReference" readonly placeholder="Tự động lấy từ scene trước hoặc tải ảnh lên"></label>
+            <div class="reference-upload-row">
+              <input id="referenceFile" type="file" accept="image/jpeg,image/png,image/webp">
+              <button class="secondary-btn" id="uploadReferenceBtn" type="button">Tải ảnh tham chiếu</button>
+            </div>
+            <label><span>Visual prompt</span><textarea id="editVisualPrompt" rows="8"></textarea></label>
+            <button class="primary-btn full" id="saveSceneBtn" type="submit">Lưu thay đổi scene</button>
+          </section>
+          <section class="editor-page" data-editor-panel="prompt">
+            <div class="copy-heading"><span>Google Flow prompt</span><button type="button" id="copyPromptBtn">Sao chép</button></div>
+            <textarea class="code-area" id="editFlowPrompt" rows="26"></textarea>
+            <p class="helper">Prompt này đã gồm Character Bible, Location Bible, camera, start/end frame và negative constraints.</p>
+            <button class="primary-btn full" type="button" id="savePromptBtn">Lưu Flow prompt</button>
+          </section>
+          <section class="editor-page" data-editor-panel="continuity">
+            <div class="continuity-map">
+              <div><span>START FRAME</span><textarea id="startState" rows="10"></textarea></div>
+              <div class="continuity-arrow">→</div>
+              <div><span>END FRAME</span><textarea id="endState" rows="10"></textarea></div>
+            </div>
+            <div class="warning-list" id="sceneWarnings"></div>
+            <button class="secondary-btn full" type="button" id="checkSceneBtn">Kiểm tra continuity toàn dự án</button>
+            <button class="primary-btn full" id="saveContinuityBtn" type="submit" style="margin-top:8px">Lưu continuity state</button>
+          </section>
+          <section class="editor-page" data-editor-panel="result">
+            <div class="result-stage" id="resultStage">
+              <div class="film-placeholder"><span>▶</span><p>Scene chưa được render</p></div>
+            </div>
+            <div class="quality-card" id="qualityCard"></div>
+            <button class="primary-btn full" type="button" id="generateSceneBtn">Generate / Regenerate scene</button>
+          </section>
+        </form>
+      </section>
+    </main>
+
+    <footer class="actionbar">
+      <div class="continuity-meter">
+        <span>CONTINUITY</span><div class="meter"><i id="continuityBar"></i></div><strong id="continuityScore">—</strong>
+      </div>
+      <div class="action-buttons">
+        <button class="secondary-btn" id="analyzeAgainBtn" disabled>Phân tích lại</button>
+        <button class="secondary-btn" id="continuityBtn" disabled>Auto continuity</button>
+        <button class="secondary-btn" id="generateSelectedBtn" disabled>Generate selected</button>
+        <button class="primary-btn" id="generateAllBtn" disabled>Generate all <span>→</span></button>
+        <button class="primary-btn accent" id="mergeAllBtn" disabled>Ghép video</button>
+      </div>
+    </footer>
+  </div>
+
+  <dialog class="modal" id="newProjectModal">
+    <form method="dialog" id="newProjectForm">
+      <div class="setup-progress" aria-label="Quy trình khởi tạo">
+        <div class="complete"><b>01</b><span>Thư mục<small id="workspacePath">Đã chọn</small></span></div>
+        <div class="active"><b>02</b><span>Phân tích<small>Đang thực hiện</small></span></div>
+        <div><b>03</b><span>Sản xuất<small>Chưa mở</small></span></div>
+      </div>
+      <div class="modal-head"><div><span class="eyebrow">BƯỚC 02 · PHÂN TÍCH NỘI DUNG</span><h2>Biến câu chuyện thành chuỗi cảnh</h2></div><button class="close-btn" id="newProjectCloseBtn" value="cancel" type="submit">×</button></div>
+      <label><span>Tên dự án</span><input id="projectNameInput" required maxlength="120" value="Phim mới"></label>
+      <label><span>Nội dung kịch bản</span><textarea id="storyInput" required minlength="20" rows="12" placeholder="Dán kịch bản, truyện, bài quảng cáo hoặc nội dung video dài..."></textarea></label>
+      <div class="form-row three">
+        <label><span>Khung hình</span><select id="aspectInput"><option>16:9</option><option>9:16</option><option>1:1</option></select></label>
+        <label><span>Thời lượng mỗi cảnh</span><select id="durationInput"><option value="4">4 giây</option><option value="6">6 giây</option><option value="8" selected>8 giây</option><option value="12">12 giây</option></select></label>
+        <label><span>Phong cách hình ảnh</span><select id="styleInput"><option value="Cinematic">Điện ảnh</option><option value="Photorealistic">Ảnh chân thực</option><option value="Commercial">Quảng cáo thương mại</option><option value="Documentary">Phim tài liệu</option><option value="Anime">Hoạt hình Anime</option><option value="3D Animation">Hoạt hình 3D</option><option value="Product Advertising">Quảng cáo sản phẩm</option></select></label>
+      </div>
+      <section class="ai-config">
+        <div class="ai-config-head">
+          <div><span class="eyebrow">PHÂN TÍCH KỊCH BẢN BẰNG AI</span><strong>Mô hình phân tích nội dung</strong></div>
+          <span class="secure-note">Mã hóa trên máy · tự động ghi nhớ</span>
+        </div>
+        <label><span>Nhà cung cấp AI phân tích</span><select id="analysisProviderInput"><option value="offline">Bộ phân tích ngoại tuyến — mặc định</option><option value="xkiro">API xKiro — chọn mô hình khả dụng</option></select></label>
+        <div class="xkiro-config hidden" id="xkiroConfig">
+          <div class="credential-overview">
+            <div class="connection-line" id="xkiroConnection"><i></i><span>Đang kiểm tra thông tin đã lưu...</span></div>
+            <button class="secondary-btn credential-edit-btn" type="button" id="editXkiroBtn">Thêm API key</button>
+          </div>
+          <div class="credential-editor hidden" id="xkiroCredentialEditor">
+            <label><span>API key xKiro mới</span><input id="xkiroKeyInput" type="password" autocomplete="new-password" placeholder="sk-xt-••••••••••••"></label>
+            <div class="credential-editor-actions">
+              <button class="secondary-btn" type="button" id="connectXkiroBtn">Lưu API key mới</button>
+              <button class="ghost-btn" type="button" id="cancelXkiroEditBtn">Hủy</button>
+              <button class="danger-ghost-btn" type="button" id="disconnectXkiroBtn">Xóa key đã lưu</button>
+            </div>
+            <p class="helper">Key mới chỉ thay thế key đang dùng sau khi xKiro xác thực thành công.</p>
+          </div>
+          <label><span>Mô hình khả dụng (<b id="modelCount">0</b> · <b id="freeModelCount">0</b> miễn phí)</span><select id="analysisModelInput" disabled><option value="">Kết nối API key để tải mô hình...</option></select></label>
+        </div>
+      </section>
+      <section class="analysis-log hidden" id="analysisLogPanel" aria-live="polite">
+        <div class="analysis-log-head">
+          <div><span class="eyebrow">NHẬT KÝ PHÂN TÍCH</span><strong>Nhật ký phân tích nội dung</strong></div>
+          <div class="analysis-log-actions">
+            <span class="analysis-job-status" id="analysisJobStatus">Chưa chạy</span>
+            <button class="ghost-btn" type="button" id="copyAnalysisLogBtn">Sao chép log</button>
+            <button class="ghost-btn" type="button" id="clearAnalysisLogBtn">Xóa log</button>
+            <button class="secondary-btn hidden" type="button" id="cancelAnalysisBtn">Hủy phân tích</button>
+          </div>
+        </div>
+        <div class="analysis-log-entries" id="analysisLogEntries"></div>
+      </section>
+      <div class="lock-row"><label><input id="characterLock" type="checkbox" checked><span>Khóa nhân vật</span></label><label><input id="locationLock" type="checkbox" checked><span>Khóa bối cảnh</span></label><label><input id="autoContinuity" type="checkbox" checked><span>Tự động giữ nhất quán</span></label></div>
+      <div class="modal-actions"><button class="secondary-btn" id="newProjectCancelBtn" value="cancel" type="submit">Hủy</button><button class="primary-btn" id="analyzeSubmit" value="default" type="submit">Phân tích nội dung <span>→</span></button><button class="hidden" id="autoPipelineSubmit" value="default" type="button" tabindex="-1">Auto pipeline</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal narrow" id="videoSetupModal">
+    <form method="dialog" id="videoSetupForm">
+      <div class="modal-head"><div><span class="eyebrow">BƯỚC 03 · TẠO VIDEO</span><h2>Thiết lập mô hình video</h2></div><button class="close-btn" value="cancel" type="submit">×</button></div>
+      <p class="step-helper">Bước này chỉ mở sau khi nội dung đã được phân tích. Model được lưu theo project; thông tin đăng nhập được mã hóa và dùng lại ở các phiên sau.</p>
+      <label><span>Render provider</span><select id="providerInput"><option value="google-flow">Google Flow CLI · embedded</option><option value="mock">Mock / Demo</option></select></label>
+      <section class="ai-config flow-config" id="flowConfig">
+        <div class="ai-config-head">
+          <div><span class="eyebrow">AI VIDEO GENERATION</span><strong>Google Flow CLI</strong></div>
+          <span class="secure-note">Windows DPAPI · tự động ghi nhớ</span>
+        </div>
+        <label><span>Video model</span><select id="videoModelInput"><option value="veo-3.1-lite-lower-priority">Veo 3.1 Lite · Lower priority</option></select></label>
+        <div class="credential-overview">
+          <div class="connection-line" id="flowConnection"><i></i><span>Đang kiểm tra thông tin đã lưu...</span></div>
+          <button class="secondary-btn" type="button" id="verifyFlowBtn">Kiểm tra</button>
+          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Thêm cookie</button>
+        </div>
+        <div class="credential-editor hidden" id="flowCredentialEditor">
+          <label><span>Google Flow cookie mới (JSON hoặc Cookie header)</span><textarea id="flowCookieInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Dán JSON xuất từ Cookie-Editor hoặc chuỗi name=value; ..."></textarea></label>
+          <div class="flow-cookie-actions">
+            <label class="file-picker"><input id="flowCookieFile" type="file" accept=".json,.txt">Chọn cookies.json</label>
+            <button class="secondary-btn" type="button" id="connectFlowBtn">Lưu cookie mới</button>
+            <button class="ghost-btn" type="button" id="cancelFlowEditBtn">Hủy</button>
+            <button class="danger-ghost-btn" type="button" id="disconnectFlowBtn">Xóa cookie đã lưu</button>
+          </div>
+          <p class="helper">Cookie mới chỉ thay thế cookie đang dùng sau khi Google Flow xác thực thành công.</p>
+        </div>
+        <p class="helper">Flow chạy bằng Chromium ẩn khi tạo video. Cookie dùng chung cho các thư mục làm việc; không nhập mật khẩu Google vào ứng dụng.</p>
+      </section>
+      <div class="modal-actions"><button class="secondary-btn" value="cancel" type="submit">Đóng</button><button class="primary-btn" id="saveVideoSetupBtn" value="default" type="submit">Lưu thiết lập</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal narrow" id="projectsModal">
+    <div class="modal-head"><div><span class="eyebrow">LOCAL STORAGE</span><h2>Dự án gần đây</h2></div><button class="close-btn" id="closeProjectsBtn">×</button></div>
+    <div class="project-list" id="projectList"></div>
+  </dialog>
+
+  <dialog class="modal narrow" id="finalVideoModal">
+    <div class="modal-head"><div><span class="eyebrow">FINAL VIDEO · HẬU KỲ</span><h2>Ghép toàn bộ scene</h2></div><button class="close-btn" id="closeFinalVideoBtn">×</button></div>
+    <p class="step-helper">Các video được ghép theo đúng thứ tự storyboard và mã hóa thành một MP4 tương thích để phát hoặc tải về.</p>
+    <div class="final-video-status" id="finalVideoStatus"><i></i><span>Chưa đủ video scene để ghép</span></div>
+    <div class="progress final-video-progress"><i id="finalVideoProgress"></i></div>
+    <div class="final-video-stage" id="finalVideoStage"><div class="film-placeholder"><span>▶</span><p>Video tổng sẽ xuất hiện tại đây</p></div></div>
+    <div class="warning-item hidden" id="finalVideoError"></div>
+    <div class="modal-actions">
+      <button class="secondary-btn" type="button" id="downloadFinalVideoBtn" disabled>Tải MP4</button>
+      <button class="primary-btn" type="button" id="startMergeBtn" disabled>Ghép toàn bộ video</button>
+    </div>
+  </dialog>
+
+  <aside class="queue-drawer" id="queueDrawer">
+    <div class="drawer-head"><div><span class="eyebrow">SEQUENTIAL RENDER</span><h2>Hàng đợi render</h2></div><button class="close-btn" id="closeQueueBtn">×</button></div>
+    <div class="queue-actions"><button class="secondary-btn" id="pauseQueueBtn">Pause</button><button class="secondary-btn" id="resumeQueueBtn">Resume</button></div>
+    <div id="queueList" class="queue-list"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <div class="toast" id="toast"></div>
+  <script src="/assets/app.js?v=1.8.3"></script>
+</body>
+</html>
