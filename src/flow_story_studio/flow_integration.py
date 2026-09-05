@@ -557,7 +557,6 @@ class FlowCLIIntegration:
                     raise
                 except Exception as exc:
                     logger.debug("Flow Agent model candidate %r failed: %s", candidate, exc)
-                    continue
             await ui.page.keyboard.press("Escape")
             raise RuntimeError(f"Could not select Flow Agent model {model!r}")
 
