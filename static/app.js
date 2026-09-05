@@ -509,22 +509,27 @@ function renderFlowConnection(connection) {
   state.flowAuthenticated = Boolean(connection.authenticated);
   state.flowTransport = connection.transport || "none";
   state.flowModels = connection.models || state.flowModels || [];
-  const usingGflow = state.flowTransport === "gflow";
-  const hasLegacyCookie = Number(connection.cookie_count || 0) > 0;
+  const hasCookies = Number(connection.cookie_count || 0) > 0;
   const line = $("#flowConnection");
   line.classList.toggle("connected", state.flowAuthenticated);
-  line.classList.toggle("error", !connection.flow_cli_available || (connection.configured && !connection.authenticated && connection.message && !connection.message.includes("Đã lưu")));
+  line.classList.toggle(
+    "error",
+    !connection.flow_cli_available
+      || (connection.configured && !connection.authenticated && connection.message),
+  );
   const details = [];
-  if (hasLegacyCookie) details.push(`${connection.cookie_count} cookie fallback`);
-  if (connection.credits_remaining !== null && connection.credits_remaining !== undefined) details.push(`${connection.credits_remaining} credit`);
+  if (hasCookies) details.push(`${connection.cookie_count} cookie`);
+  if (connection.credits_remaining !== null && connection.credits_remaining !== undefined) {
+    details.push(`${connection.credits_remaining} credit`);
+  }
   if (connection.tier) details.push(connection.tier);
   line.querySelector("span").textContent = state.flowAuthenticated
-    ? `${usingGflow ? "gflow + Chrome" : "Google Flow fallback"} đã xác thực${details.length ? ` · ${details.join(" · ")}` : ""}`
+    ? `Flow CLI đã xác thực${details.length ? ` · ${details.join(" · ")}` : ""}`
     : state.flowConfigured
-      ? (usingGflow ? (connection.message || "gflow Chrome profile sẵn sàng; nhấn Kiểm tra") : `Đã lưu cookie fallback${details.length ? ` · ${details.join(" · ")}` : ""}`)
+      ? (connection.message || `Đã lưu phiên Flow CLI${details.length ? ` · ${details.join(" · ")}` : ""}`)
       : (connection.message || "Chưa cấu hình Google Flow");
-  $("#editFlowBtn").textContent = hasLegacyCookie ? "Thay cookie fallback" : "Cookie fallback";
-  $("#disconnectFlowBtn").disabled = !hasLegacyCookie;
+  $("#editFlowBtn").textContent = hasCookies ? "Thay phiên Flow CLI" : "Kết nối Flow CLI";
+  $("#disconnectFlowBtn").disabled = !hasCookies;
   const select = $("#videoModelInput");
   const previous = select.value || state.project?.settings?.video_model || "veo-3.1-lite-lower-priority";
   if (state.flowModels.length) {
@@ -533,8 +538,8 @@ function renderFlowConnection(connection) {
   }
   const top = $("#providerStatus");
   top.childNodes[top.childNodes.length - 1].textContent = state.flowAuthenticated
-    ? (usingGflow ? " gflow + Chrome sẵn sàng" : " Google Flow fallback sẵn sàng")
-    : state.flowConfigured ? " Flow cần kiểm tra" : " Chưa đăng nhập Flow";
+    ? " Flow CLI sẵn sàng"
+    : state.flowConfigured ? " Flow CLI cần kiểm tra" : " Chưa kết nối Flow CLI";
 }
 
 function setFlowCredentialEditor(open) {
@@ -571,7 +576,7 @@ async function connectFlow() {
     $("#flowCookieInput").value = "";
     $("#flowCookieFile").value = "";
     setFlowCredentialEditor(false);
-    toast("Đã lưu và xác thực cookie fallback Google Flow");
+    toast("Đã lưu và xác thực phiên Flow CLI Google Flow");
   } catch (error) {
     toast(error.message, true);
     const line = $("#flowConnection");
@@ -671,7 +676,7 @@ async function createProject(autoPipeline = false) {
     if (!$("#analysisModelInput").value) return toast("Hãy chọn model xKiro", true);
   }
   if (autoPipeline && $("#providerInput").value === "google-flow" && !state.flowConfigured) {
-    return toast("Hãy đăng nhập gflow + Chrome hoặc cấu hình cookie fallback trước khi chạy Auto pipeline", true);
+    return toast("Hãy kết nối và xác thực Flow CLI trước khi chạy Auto pipeline", true);
   }
   const button = autoPipeline ? $("#autoPipelineSubmit") : $("#analyzeSubmit");
   const original = button.textContent;
@@ -819,7 +824,7 @@ function bindEvents() {
   $("#cancelFlowEditBtn").onclick = () => setFlowCredentialEditor(false);
   $("#verifyFlowBtn").onclick = () => loadFlowStatus(true);
   $("#disconnectFlowBtn").onclick = async () => {
-    try { renderFlowConnection(await api("/api/video/flow", { method: "DELETE" })); setFlowCredentialEditor(false); toast("Đã xóa cookie fallback Google Flow khỏi máy"); }
+    try { renderFlowConnection(await api("/api/video/flow", { method: "DELETE" })); setFlowCredentialEditor(false); toast("Đã xóa phiên Flow CLI Google Flow khỏi máy"); }
     catch (error) { toast(error.message, true); }
   };
   $("#flowCookieFile").onchange = async (event) => {
