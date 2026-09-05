@@ -1,0 +1,77 @@
+name: xKiro Story Acceptance
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "acceptance/fixtures/**"
+      - "scripts/xkiro-story-acceptance.py"
+      - ".github/workflows/xkiro-story-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xkiro-story-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      XKIRO_API_KEY: ${{ secrets.XKIRO_API_KEY }}
+      XKIRO_REQUEST_TIMEOUT: "900"
+      XKIRO_REQUEST_RETRIES: "4"
+      XKIRO_SCENE_BATCH_SIZE: "4"
+      XKIRO_JSON_REPAIR_ATTEMPTS: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install analysis runtime
+        shell: pwsh
+        run: |
+          python -m pip install "pip==26.2.1"
+          python -m pip install -c requirements.lock.txt -e .
+
+      - name: Verify xKiro secret
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:XKIRO_API_KEY)) {
+            throw "Repository secret XKIRO_API_KEY is not configured"
+          }
+
+      - name: Run live MiniMax 2.7 Free screenplay acceptance
+        id: acceptance
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python scripts/xkiro-story-acceptance.py `
+            --script "acceptance/fixtures/chiec-ve-khong-co-chuyen-tau.md" `
+            --manifest "acceptance/fixtures/chiec-ve-source-truth.json" `
+            --output "acceptance-results/acceptance-report.json" `
+            --project-output "acceptance-results/project.json"
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xkiro-chiec-ve-acceptance
+          path: |
+            acceptance-results/acceptance-report.json
+            acceptance-results/project.json
+          if-no-files-found: warn
+
+      - name: Enforce strict acceptance
+        if: steps.acceptance.outcome != 'success'
+        shell: pwsh
+        run: |
+          throw "xKiro screenplay acceptance did not reach strict 100% source-truth readiness"
