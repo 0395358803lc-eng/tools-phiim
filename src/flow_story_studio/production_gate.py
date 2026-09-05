@@ -13,6 +13,39 @@ def _below_threshold(values: dict[str, int], threshold: int) -> list[str]:
     return [f"{name}={score}<{threshold}" for name, score in values.items() if score < threshold]
 
 
+def scene_production_score_floor(scene: Scene) -> int:
+    scores: list[int] = []
+    if scene.quality is not None:
+        scores.append(scene.quality.score)
+
+    scores.extend(
+        [
+            scene.visual_qc.score,
+            scene.visual_qc.character_identity,
+            scene.visual_qc.location_identity,
+            scene.visual_qc.prop_consistency,
+            scene.visual_qc.wardrobe_consistency,
+            scene.visual_qc.lighting_consistency,
+            scene.visual_qc.action_consistency,
+            scene.visual_qc.composition_consistency,
+        ]
+    )
+
+    if scene.visual_plan.dependency_mode == "direct":
+        scores.extend(
+            [
+                scene.continuity_qc.score,
+                scene.continuity_qc.character_match,
+                scene.continuity_qc.location_match,
+                scene.continuity_qc.wardrobe_match,
+                scene.continuity_qc.prop_state_match,
+                scene.continuity_qc.lighting_match,
+                scene.continuity_qc.screen_direction_match,
+            ]
+        )
+    return min(scores) if scores else 0
+
+
 def scene_production_blockers(
     project: Project,
     scene: Scene,
@@ -30,6 +63,12 @@ def scene_production_blockers(
     if scene.acceptance.score < threshold:
         reasons.append(
             f"production acceptance score {scene.acceptance.score} is below {threshold}"
+        )
+    strict_floor = scene_production_score_floor(scene)
+    if scene.acceptance.status == "Accepted" and scene.acceptance.score != strict_floor:
+        reasons.append(
+            "production acceptance score does not match strict component floor: "
+            f"{scene.acceptance.score}!={strict_floor}"
         )
     if not scene.ai_locked:
         reasons.append("scene is not AI continuity locked")
