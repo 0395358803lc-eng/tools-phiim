@@ -227,6 +227,8 @@ class Scene(StrictModel):
     result_url: str = ""
     result_file: str = ""
     last_frame_file: str = ""
+    render_provider: str = ""
+    render_model: str = ""
     provider_job_id: str = ""
     upstream_project_id: str = ""
     upstream_workflow_id: str = ""
