@@ -179,6 +179,7 @@ class VisualBible(StrictModel):
 
 class SceneVisualPlan(StrictModel):
     dependency_mode: Literal["opening", "direct", "canonical"] = "canonical"
+    inherit_previous_frame: bool = False
     anchor_scene_id: str = ""
     character_reference_ids: list[str] = Field(default_factory=list)
     location_reference_id: str = ""
