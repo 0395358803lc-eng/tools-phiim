@@ -7,9 +7,7 @@ import importlib.util
 import logging
 import os
 import re
-import shutil
 import socket
-import subprocess  # nosec B404
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -125,24 +123,18 @@ class FlowCLIIntegration:
         self.data_root = data_root.resolve()
         credential_dir = (credential_root or self.data_root / "secrets").resolve()
         self.vault = CookieVault(credential_dir / "google-flow.cookies.bin")
-        legacy_vault = CookieVault(self.data_root / "secrets" / "google-flow.cookies.bin")
-        if legacy_vault.path != self.vault.path and not self.vault.path.exists():
+        workspace_vault = CookieVault(self.data_root / "secrets" / "google-flow.cookies.bin")
+        if workspace_vault.path != self.vault.path and not self.vault.path.exists():
             try:
-                cookies, raw = legacy_vault.load()
+                cookies, raw = workspace_vault.load()
                 if cookies:
                     self._save_cookies(cookies, raw)
             except FlowCredentialError:
-                # Keep the app usable so the user can replace a damaged legacy cookie.
+                # Keep the app usable so the user can replace a damaged stored Flow CLI session.
                 pass
         self.timeout = timeout or int(os.getenv("FLOW_RENDER_TIMEOUT", "900"))
         self._force_headed_browser = False
         self._active_media_type = "video"
-        self.gflow_executable = shutil.which(os.getenv("GFLOW_EXECUTABLE", "gflow"))
-        self.gflow_workdir = Path(
-            os.getenv("GFLOW_WORKDIR", str(self.data_root.parent))
-        ).resolve()
-        self.gflow_profile = os.getenv("GFLOW_PROFILE", "default")
-        self.gflow_debug_port = os.getenv("GFLOW_DEBUG_PORT", "9333")
         self._chrome_port_file = Path(
             os.getenv(
                 "FLOW_CHROME_DEVTOOLS_ACTIVE_PORT",
@@ -160,152 +152,7 @@ class FlowCLIIntegration:
 
     @property
     def configured(self) -> bool:
-        return self._gflow_profile_ready() or self.vault.path.is_file()
-
-    def _gflow_profile_dir(self) -> Path:
-        return self.gflow_workdir / ".gflow" / "profiles" / self.gflow_profile
-
-    def _gflow_profile_ready(self) -> bool:
-        return bool(self.gflow_executable) and self._gflow_profile_dir().is_dir()
-
-    async def _run_gflow(
-        self, args: list[str], *, timeout: int
-    ) -> subprocess.CompletedProcess[str]:
-        if not self.gflow_executable:
-            raise FlowIntegrationError("gflow CLI is not installed or not on PATH")
-        self.gflow_workdir.mkdir(parents=True, exist_ok=True)
-        env = os.environ.copy()
-        env["GFLOW_DEBUG_PORT"] = self.gflow_debug_port
-        command: list[str]
-        creationflags = 0
-        if os.name == "nt" and self.gflow_executable.lower().endswith((".cmd", ".bat")):
-            launcher_dir = Path(self.gflow_executable).resolve().parent
-            entrypoint = (
-                launcher_dir
-                / "node_modules"
-                / "@swissmarley"
-                / "gflow-cli"
-                / "dist"
-                / "src"
-                / "index.js"
-            )
-            node = shutil.which("node")
-            if not node or not entrypoint.is_file():
-                raise FlowIntegrationError(
-                    "gflow Windows launcher requires Node.js and the installed gflow entrypoint; "
-                    "refusing cmd.exe fallback"
-                )
-            command = [node, str(entrypoint), *args]
-            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            command = [self.gflow_executable, *args]
-
-        def run() -> subprocess.CompletedProcess[str]:
-            # The executable path is resolved locally and arguments stay as an argv list.
-            return subprocess.run(  # nosec B603
-                command,
-                cwd=self.gflow_workdir,
-                env=env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                check=False,
-                creationflags=creationflags,
-                shell=False,
-            )
-
-        try:
-            completed = await asyncio.to_thread(run)
-        except subprocess.TimeoutExpired as exc:
-            raise FlowIntegrationError(f"gflow timed out after {timeout}s") from exc
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "gflow failed").strip()
-            raise FlowIntegrationError(detail[:1200])
-        return completed
-
-    @staticmethod
-    def _gflow_saved_paths(stdout: str) -> list[Path]:
-        paths: list[Path] = []
-        for raw in stdout.splitlines():
-            line = raw.strip()
-            if not line.lower().startswith("saved "):
-                continue
-            candidate = Path(line[6:].strip().strip('\"'))
-            if candidate.is_file():
-                paths.append(candidate.resolve())
-        return paths
-
-    @staticmethod
-    def _gflow_job_id(*parts: str) -> str:
-        value = "-".join(parts).strip().lower()
-        return re.sub(r"[^a-z0-9._-]+", "-", value).strip("-")[:96] or "gflow-job"
-
-    async def _gflow_reference_image(self, project_id: str, reference_id: str, prompt: str) -> str:
-        output = self.data_root / "references" / project_id / "entities"
-        output.mkdir(parents=True, exist_ok=True)
-        job_id = self._gflow_job_id(project_id, reference_id)
-        model = os.getenv("FLOW_REFERENCE_IMAGE_MODEL", "nano-banana-pro")
-        completed = await self._run_gflow(
-            [
-                "image", "--id", job_id, "--prompt", prompt,
-                "--ratio", "1:1", "--model", model,
-                "--outputs", "1", "--out", str(output),
-                "--profile", self.gflow_profile, "--browser", "chrome",
-                "--headed", "--timeout", str(min(self.timeout, 300)),
-            ],
-            timeout=min(self.timeout, 300) + 90,
-        )
-        images = [
-            item for item in self._gflow_saved_paths(completed.stdout)
-            if item.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-        ]
-        if not images:
-            raise FlowIntegrationError("gflow completed without a downloaded reference image")
-        return images[0].relative_to(self.data_root).as_posix()
-
-    async def _gflow_video(self, project: Project, scene: Scene) -> RenderResult:
-        output = self.data_root / "renders" / project.id / scene.id
-        output.mkdir(parents=True, exist_ok=True)
-        job_id = self._gflow_job_id(project.id, scene.id)
-        requested_duration = int(round(float(scene.duration or 8)))
-        duration = min((4, 6, 8), key=lambda value: abs(value - requested_duration))
-        args = [
-            "video", "--id", job_id, "--prompt", self._prompt(scene),
-            "--outputs", "1", "--out", str(output),
-            "--profile", self.gflow_profile, "--browser", "chrome",
-            "--headed", "--timeout", str(self.timeout),
-            "--duration", str(duration),
-        ]
-        if project.settings.aspect_ratio:
-            args.extend(["--ratio", project.settings.aspect_ratio])
-        configured_model = (project.settings.video_model or "").strip()
-        visible_model = os.getenv("GFLOW_VIDEO_MODEL", "").strip()
-        if visible_model:
-            args.extend(["--model", visible_model])
-        elif configured_model and not configured_model.startswith("veo-"):
-            args.extend(["--model", configured_model])
-        reference = self._reference_path(scene.reference_image)
-        if reference:
-            args.extend(["--start-frame", reference])
-        completed = await self._run_gflow(args, timeout=self.timeout + 120)
-        videos = [
-            item for item in self._gflow_saved_paths(completed.stdout)
-            if item.suffix.lower() == ".mp4"
-        ]
-        if not videos:
-            raise FlowIntegrationError("gflow completed without a downloaded MP4")
-        video = videos[0]
-        scene.provider_job_id = job_id
-        last_frame_file = await self._extract_last_frame(project.id, scene.id, video)
-        return RenderResult(
-            job_id=job_id,
-            result_url=f"/api/projects/{project.id}/scenes/{scene.id}/video",
-            result_file=video.relative_to(self.data_root).as_posix(),
-            last_frame_file=last_frame_file,
-            upstream_project_id="",
-        )
+        return self.vault.path.is_file()
 
     def _clear_cookies(self) -> None:
         try:
@@ -340,69 +187,31 @@ class FlowCLIIntegration:
             return False
 
     async def status(self, *, verify: bool = False) -> FlowConnection:
-        gflow_available = bool(self.gflow_executable)
-        gflow_profile_ready = self._gflow_profile_ready()
-        legacy_available = _flow_cli_available()
-        if gflow_profile_ready:
-            connection = FlowConnection(
-                configured=True,
-                authenticated=False,
-                transport="gflow",
-                cookie_count=0,
-                message="gflow Chrome profile is ready",
-                flow_cli_available=True,
-                gflow_available=gflow_available,
-                gflow_profile_ready=True,
-                legacy_flow_cli_available=legacy_available,
-                browser_ready=True,
-                models=VIDEO_MODELS,
-            )
-            if verify:
-                try:
-                    await self._run_gflow(
-                        ["doctor", "--profile", self.gflow_profile, "--browser", "chrome"],
-                        timeout=60,
-                    )
-                    connection.authenticated = True
-                    connection.message = "gflow Chrome session is authenticated and ready"
-                except FlowIntegrationError as exc:
-                    connection.message = str(exc)
-            return connection
-
-        legacy_configured = self.vault.path.is_file()
-        cookies, _ = self._load_cookies() if legacy_configured else ({}, None)
+        flow_cli_available = _flow_cli_available()
+        stored = self.vault.path.is_file()
+        cookies, _ = self._load_cookies() if stored else ({}, None)
         connection = FlowConnection(
             configured=bool(cookies),
             authenticated=False,
-            transport="legacy-cookie" if cookies else "none",
+            transport="flow-cli" if cookies else "none",
             cookie_count=len(cookies),
             message="Chưa cấu hình Google Flow",
-            flow_cli_available=gflow_available or legacy_available,
-            gflow_available=gflow_available,
-            gflow_profile_ready=False,
-            legacy_flow_cli_available=legacy_available,
+            flow_cli_available=flow_cli_available,
             browser_ready=self._browser_ready(),
             models=VIDEO_MODELS,
         )
-        if not cookies:
-            if gflow_available:
-                connection.message = (
-                    "gflow đã được cài nhưng chưa có Chrome profile; "
-                    "hãy chạy 'gflow auth login', sau đó 'gflow doctor'"
-                )
-            elif legacy_available:
-                connection.message = (
-                    "gflow chưa sẵn sàng; có thể cấu hình cookie fallback legacy nếu cần"
-                )
-            else:
-                connection.message = "Chưa cài gflow và legacy Flow CLI cũng không khả dụng"
+        if not flow_cli_available:
+            connection.message = "Flow CLI tích hợp không khả dụng"
             return connection
-        if not legacy_available:
-            connection.message = "Đã có cookie fallback nhưng legacy Flow CLI không khả dụng"
+        if not cookies:
+            connection.message = (
+                "Flow CLI đã sẵn sàng; hãy kết nối phiên Google Flow bằng cookie hoặc cookies.json"
+            )
             return connection
         if not verify:
-            connection.message = "Đã lưu cookie fallback; nhấn kiểm tra để xác thực"
+            connection.message = "Đã lưu phiên Flow CLI; nhấn Kiểm tra để xác thực"
             return connection
+
         from flow_cli._auth import validate_cookies
 
         ok, message, _ = await asyncio.to_thread(validate_cookies, cookies, 15)
@@ -420,9 +229,7 @@ class FlowCLIIntegration:
 
     async def connect(self, cookie_input: str) -> FlowConnection:
         if not _flow_cli_available():
-            raise FlowIntegrationError(
-                "Legacy Flow CLI chưa khả dụng; cookie fallback không thể dùng"
-            )
+            raise FlowIntegrationError("Flow CLI tích hợp chưa khả dụng")
         cookies, raw = _parse_cookie_input(cookie_input)
         from flow_cli._auth import validate_cookies
 
@@ -1127,12 +934,10 @@ class FlowCLIIntegration:
         self, project_id: str, reference_id: str, prompt: str
     ) -> str:
         """Generate and download one canonical reference image through Google Flow."""
-        if self._gflow_profile_ready():
-            return await self._gflow_reference_image(project_id, reference_id, prompt)
         cookies, _ = self.vault.load()
         if not cookies:
             raise FlowIntegrationError(
-                "gflow + Chrome chưa sẵn sàng và chưa có cookie fallback để tạo reference image"
+                "Chưa có phiên xác thực Flow CLI để tạo reference image"
             )
         client = self._client(cookies)
         model = os.getenv("FLOW_REFERENCE_IMAGE_MODEL", "nano-banana-pro")
@@ -1197,15 +1002,10 @@ class FlowCLIIntegration:
             recovered = await self._recover_submitted(project, scene)
             if recovered:
                 return recovered
-        if self._gflow_profile_ready():
-            result = await self._gflow_video(project, scene)
-            if checkpoint:
-                checkpoint(project, scene)
-            return result
         cookies, _ = self.vault.load()
         if not cookies:
             raise FlowIntegrationError(
-                "gflow + Chrome chưa sẵn sàng và chưa có cookie fallback để render"
+                "Chưa có phiên xác thực Flow CLI để render"
             )
         client = self._client(cookies, project.flow_project_id or None)
         upstream_project_id = project.flow_project_id
