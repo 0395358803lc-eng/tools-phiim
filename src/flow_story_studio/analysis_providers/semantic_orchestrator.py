@@ -630,6 +630,22 @@ def _is_direct_continuation(previous_scene: Scene | None, scene: Scene) -> bool:
     return True
 
 
+def _state_claims_nonvisual(value: str) -> bool:
+    folded = semantic_key(value)
+    markers = (
+        "khong co mat",
+        "khong o trong khung hinh",
+        "not in frame",
+        "not present",
+        "not in scene",
+        "off screen",
+        "offscreen",
+        "voice only",
+        "giong noi",
+    )
+    return any(marker in folded for marker in markers)
+
+
 def normalize_semantic_scene(
     scene: Scene,
     *,
@@ -644,13 +660,27 @@ def normalize_semantic_scene(
         scene, props, previous_props, direct_continuation=direct
     )
     visible_ids = set(scene.characters)
-    for state in (scene.start_state, scene.end_state):
+    character_by_id = {item.id: item for item in characters}
+    for state_index, state in enumerate((scene.start_state, scene.end_state)):
         state.character_positions = {
             key: value for key, value in state.character_positions.items() if key in visible_ids
         }
         state.character_wardrobe = {
             key: value for key, value in state.character_wardrobe.items() if key in visible_ids
         }
+        for character_id in visible_ids:
+            position = state.character_positions.get(character_id, "").strip()
+            if not position or _state_claims_nonvisual(position):
+                phase = "start" if state_index == 0 else "end"
+                state.character_positions[character_id] = (
+                    f"Visible in source-grounded {phase} frame at {scene.location_id}; "
+                    "blocking follows the authored action"
+                )
+            wardrobe = state.character_wardrobe.get(character_id, "").strip()
+            if not wardrobe or _state_claims_nonvisual(wardrobe):
+                character = character_by_id.get(character_id)
+                if character is not None:
+                    state.character_wardrobe[character_id] = character.clothing
     scene.start_state.prop_positions = dict(start_props)
     scene.end_state.prop_positions = dict(end_props)
     scene.camera = camera_for_scene(scene, len(scene.characters))
