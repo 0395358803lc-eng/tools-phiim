@@ -190,6 +190,35 @@ def prop_ids_for_scene(scene: typing.Any) -> set[str]:
     return values
 
 
+def mentions_character(text: object, name: str) -> bool:
+    raw = str(text)
+    tokens = re.findall(r"[\wÀ-ỹ]+", name.strip(), re.UNICODE)
+    if len(tokens) == 1 and len(tokens[0]) <= 3:
+        forms = {name.strip(), name.strip().upper(), name.strip().title()}
+        pattern = r"(?<!\w)(?:" + "|".join(re.escape(item) for item in forms if item) + r")(?!\w)"
+        return re.search(pattern, raw, re.UNICODE) is not None
+    target = fold(name)
+    haystack = fold(raw)
+    return bool(target and re.search(rf"(?<![a-z0-9]){re.escape(target)}(?![a-z0-9])", haystack))
+
+
+def state_claims_absent(value: object) -> bool:
+    folded = fold(value)
+    markers = (
+        "khong co mat",
+        "khong o trong khung hinh",
+        "khong xuat hien",
+        "not in frame",
+        "not present",
+        "not in scene",
+        "not visible",
+        "off screen",
+        "offscreen",
+        "voice only",
+    )
+    return any(marker in folded for marker in markers)
+
+
 def audit_project(
     project: Project,
     manifest: dict[str, typing.Any],
@@ -199,6 +228,7 @@ def audit_project(
     warnings: list[dict[str, typing.Any]] = []
     diagnostics: list[dict[str, typing.Any]] = []
     scene_audit: list[dict[str, typing.Any]] = []
+    provider_fallback_scenes: set[str] = set()
 
     def error(code: str, message: str, scene: int | None = None) -> None:
         item: dict[str, typing.Any] = {"code": code, "message": message}
@@ -320,13 +350,86 @@ def audit_project(
             if not scene.ai_locked:
                 error("AI_LOCK", f"Scene {scene.id} is not AI continuity locked", number)
             for item in scene.warnings:
-                if (
+                if "response incomplete; retained deterministic source-truth scene data" in item:
+                    provider_fallback_scenes.add(scene.id)
+                    diagnostic("XKIRO_SOURCE_TRUTH_FALLBACK", f"{scene.id}: {item}", number)
+                elif (
                     "camera conflicted with source-grounded visual cast" in item
                     and "sanitized to match visible cast" in item
                 ):
                     diagnostic("RESOLVED_CAMERA_SANITIZE", f"{scene.id}: {item}", number)
                 else:
                     warning("SCENE_WARNING", f"{scene.id}: {item}", number)
+
+            visible_ids = set(scene.characters)
+            for state_name, state in (
+                ("start", scene.start_state),
+                ("end", scene.end_state),
+            ):
+                missing_positions = visible_ids - set(state.character_positions)
+                missing_wardrobe = visible_ids - set(state.character_wardrobe)
+                if missing_positions:
+                    error(
+                        "STATE_CHARACTER_POSITION_MISSING",
+                        f"{scene.id} {state_name} state missing positions: "
+                        f"{sorted(missing_positions)}",
+                        number,
+                    )
+                if missing_wardrobe:
+                    error(
+                        "STATE_CHARACTER_WARDROBE_MISSING",
+                        f"{scene.id} {state_name} state missing wardrobe: "
+                        f"{sorted(missing_wardrobe)}",
+                        number,
+                    )
+                for character_id in visible_ids:
+                    position = state.character_positions.get(character_id, "")
+                    wardrobe = state.character_wardrobe.get(character_id, "")
+                    if state_claims_absent(position) or state_claims_absent(wardrobe):
+                        error(
+                            "STATE_VISIBLE_CHARACTER_ABSENT",
+                            f"{scene.id} {state_name} state says visible character "
+                            f"{character_id} is absent",
+                            number,
+                        )
+                state_text = " ".join(
+                    [
+                        state.camera,
+                        state.notes,
+                        *state.character_positions.values(),
+                        *state.character_wardrobe.values(),
+                    ]
+                )
+                for forbidden_name in rule.get("forbidden", []):
+                    if mentions_character(state_text, forbidden_name):
+                        error(
+                            "STATE_FORBIDDEN_CHARACTER_LEAK",
+                            f"{scene.id} {state_name} state leaks forbidden character "
+                            f"{forbidden_name}",
+                            number,
+                        )
+
+            dependency_mode = scene.visual_plan.dependency_mode
+            has_direct_claim = "Direct continuation of" in scene.flow_prompt
+            has_canonical_claim = "Canonical cut/new beat" in scene.flow_prompt
+            if dependency_mode == "direct" and not has_direct_claim:
+                error(
+                    "FLOW_DEPENDENCY_PROMPT",
+                    f"{scene.id} is direct but Flow prompt lacks direct-continuation lock",
+                    number,
+                )
+            if dependency_mode != "direct" and has_direct_claim:
+                error(
+                    "FLOW_DEPENDENCY_PROMPT",
+                    f"{scene.id} is {dependency_mode} but Flow prompt claims direct continuation",
+                    number,
+                )
+            if dependency_mode == "canonical" and not has_canonical_claim:
+                error(
+                    "FLOW_DEPENDENCY_PROMPT",
+                    f"{scene.id} canonical cut lacks explicit canonical reset wording",
+                    number,
+                )
 
         missing_required = required - aggregate_visible
         if missing_required:
@@ -459,7 +562,11 @@ def audit_project(
     if project.continuity_score != 100:
         error("CONTINUITY_SCORE", f"Continuity score is {project.continuity_score}, expected 100")
     for item in project.continuity_warnings:
-        if (
+        if "response incomplete; retained deterministic source-truth scene data" in item:
+            match = re.match(r"(SCENE_\d+):", item)
+            if match:
+                provider_fallback_scenes.add(match.group(1))
+        elif (
             "camera conflicted with source-grounded visual cast" in item
             and "sanitized to match visible cast" in item
         ):
@@ -484,13 +591,20 @@ def audit_project(
             "continuity_score": project.continuity_score,
             "continuity_warnings": project.continuity_warnings,
         },
+        "provider": {
+            "fallback_scene_ids": sorted(provider_fallback_scenes),
+            "fallback_scene_count": len(provider_fallback_scenes),
+            "direct_ai_enrichment_complete": not provider_fallback_scenes,
+        },
         "errors": errors,
         "warnings": warnings,
         "diagnostics": diagnostics,
         "scene_audit": scene_audit,
         "note": (
-            "This verdict covers analysis/source-truth readiness before rendering. "
-            "Rendered pixels, voices, timing and final MP4 continuity still require live video QC."
+            "This verdict covers final analysis/source-truth readiness before rendering. "
+            "Provider fallback scenes are reported separately and do not fail production acceptance "
+            "when the deterministic final state passes every source-truth gate. Rendered pixels, "
+            "voices, timing and final MP4 continuity still require live video QC."
         ),
     }
 
