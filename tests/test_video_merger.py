@@ -57,6 +57,8 @@ def completed_project(storage: ProjectStorage, data_root: Path):
             else ContinuityQCReport(status="NotApplicable", score=100, model_id="mock")
         )
         scene.result_file = clip.relative_to(data_root).as_posix()
+        scene.render_provider = project.settings.provider
+        scene.render_model = project.settings.video_model
     return storage.save(project)
 
 
@@ -89,6 +91,15 @@ def test_merger_uses_storyboard_order_and_atomic_output(tmp_path: Path, monkeypa
     assert result.scene_count == len(project.scenes)
     assert (tmp_path / result.result_file).read_bytes() == b"joined-video"
     assert not (tmp_path / "renders" / project.id / "final" / ".concat-list.txt").exists()
+
+
+def test_merger_rejects_clip_rendered_with_different_model(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    project.scenes[0].render_model = "different-model"
+
+    with pytest.raises(VideoMergeError, match="chưa có tệp video hoàn chỉnh"):
+        VideoMerger(tmp_path).clips_for(project)
 
 
 def test_merger_rejects_incomplete_scene(tmp_path: Path) -> None:

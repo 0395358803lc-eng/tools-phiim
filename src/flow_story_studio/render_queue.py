@@ -106,6 +106,8 @@ class RenderQueue:
                 scene.result_url = ""
                 scene.result_file = ""
                 scene.last_frame_file = ""
+                scene.render_provider = ""
+                scene.render_model = ""
                 scene.visual_qc = VisualQCReport()
                 scene.continuity_qc = ContinuityQCReport()
                 scene.acceptance = ProductionAcceptance()
@@ -168,6 +170,8 @@ class RenderQueue:
 
     async def _post_render_qc(self, project: Project, scene: Scene) -> None:
         scene.quality = score_scene(scene, project.settings.quality_threshold)
+        scene.render_provider = project.settings.provider
+        scene.render_model = project.settings.video_model
         if project.settings.provider == "mock":
             scene.visual_qc = VisualQCReport(
                 status="Passed",

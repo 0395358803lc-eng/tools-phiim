@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 
 from flow_story_studio.engines.analyzer import analyze_story
-from flow_story_studio.models import AnalyzeRequest, SceneUpdate
+from flow_story_studio.models import (
+    AnalyzeRequest,
+    ContinuityQCReport,
+    QualityReport,
+    SceneUpdate,
+    VisualQCReport,
+)
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.scene_contracts import SCENE_CONTRACT_VERSION, verify_scene_contract
 from flow_story_studio.service import StudioService
@@ -136,7 +142,28 @@ def test_final_merger_rejects_clip_with_stale_scene_contract(tmp_path: Path) -> 
         clip.write_bytes(b"video")
         scene.status = "Accepted"
         scene.acceptance.status = "Accepted"
+        scene.acceptance.score = 100
+        scene.quality = QualityReport()
+        scene.visual_qc = VisualQCReport(
+            status="Passed",
+            score=100,
+            character_identity=100,
+            location_identity=100,
+            prop_consistency=100,
+            wardrobe_consistency=100,
+            lighting_consistency=100,
+            action_consistency=100,
+            composition_consistency=100,
+            model_id="mock",
+        )
+        scene.continuity_qc = (
+            ContinuityQCReport(status="Passed", score=100, model_id="mock")
+            if scene.visual_plan.dependency_mode == "direct"
+            else ContinuityQCReport(status="NotApplicable", score=100, model_id="mock")
+        )
         scene.result_file = clip.relative_to(tmp_path).as_posix()
+        scene.render_provider = project.settings.provider
+        scene.render_model = project.settings.video_model
 
     project.scenes[0].lighting += " drift"
     with pytest.raises(VideoMergeError, match="chưa có tệp video hoàn chỉnh"):

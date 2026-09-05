@@ -113,6 +113,53 @@ def test_video_settings_and_continuity_are_locked_during_render(tmp_path: Path) 
         assert "render đang chạy" in continuity.json()["detail"]
 
 
+def test_changing_video_settings_invalidates_old_render_evidence(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    app = create_app(storage)
+    with TestClient(app) as client:
+        project_data = client.post(
+            "/api/projects/analyze",
+            json={"name": "Settings evidence", "original_text": TEXT, "settings": {}},
+        ).json()
+        project = storage.get(project_data["id"])
+        assert project is not None
+        scene = project.scenes[0]
+        scene.status = "Accepted"
+        scene.progress = 100
+        scene.result_url = "/old-result"
+        scene.result_file = "renders/old.mp4"
+        scene.last_frame_file = "references/old.jpg"
+        scene.render_provider = project.settings.provider
+        scene.render_model = project.settings.video_model
+        scene.provider_job_id = "old-job"
+        scene.acceptance.status = "Accepted"
+        scene.acceptance.score = 100
+        scene.visual_qc.status = "Passed"
+        project.final_video.status = "Ready"
+        storage.save(project)
+
+        updated = client.patch(
+            f"/api/projects/{project.id}/video-settings",
+            json={
+                "provider": "google-flow",
+                "video_model": "veo-3.1-lite-lower-priority",
+            },
+        )
+        assert updated.status_code == 200
+        payload = updated.json()
+        changed = payload["scenes"][0]
+        assert changed["status"] == "Waiting"
+        assert changed["result_url"] == ""
+        assert changed["result_file"] == ""
+        assert changed["last_frame_file"] == ""
+        assert changed["render_provider"] == ""
+        assert changed["render_model"] == ""
+        assert changed["provider_job_id"] == ""
+        assert changed["acceptance"]["status"] == "Pending"
+        assert changed["visual_qc"]["status"] == "Pending"
+        assert payload["final_video"]["status"] == "NotReady"
+
+
 def test_scene_video_supports_browser_byte_ranges(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     app = create_app(storage)

@@ -82,14 +82,15 @@ def build_project_router(
     @router.patch("/api/projects/{project_id}/video-settings", response_model=Project)
     async def update_video_settings(project_id: str, patch: VideoProviderUpdate) -> Project:
         try:
-            project = service.get_idle_project(project_id, "đổi provider hoặc video model")
+            return service.update_video_settings(
+                project_id,
+                patch.provider,
+                patch.video_model,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
         except PermissionError as exc:
             raise HTTPException(status_code=423, detail=str(exc)) from exc
-        project.settings.provider = patch.provider
-        project.settings.video_model = patch.video_model
-        return storage.save(project)
 
     @router.delete("/api/projects/{project_id}", status_code=204)
     async def delete_project(
