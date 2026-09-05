@@ -6,8 +6,8 @@ import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 
 from .flow_integration import FlowCLIIntegration
 from .logging_config import get_logger
@@ -17,6 +17,91 @@ from .storage import ProjectStorage
 from .video_merger import VideoMergeError, VideoMerger
 
 LOGGER = get_logger("video")
+
+
+def _read_range(path: Path, start: int, end: int) -> bytes:
+    with path.open("rb") as handle:
+        handle.seek(start)
+        return handle.read(end - start + 1)
+
+
+def _parse_int(value: str) -> int | None:
+    """Convert a range number safely, returning None if it is not a valid non-negative integer."""
+    if not value.isdigit():
+        return None
+    return int(value)
+
+
+def _serve_media_file(request: Request, path: Path, media_type: str, filename: str) -> Response:
+    """Serve a media file, honoring HTTP byte-range requests.
+
+    Video/browser players issue `Range` requests to seek; this returns a 206
+    Partial Content with the exact requested slice instead of streaming the whole
+    file. A plain request still streams the full file (200).
+    """
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header is None:
+        return FileResponse(path, media_type=media_type, filename=filename)
+
+    if not range_header.startswith("bytes="):
+        raise HTTPException(status_code=416, detail="Không hỗ trợ dạng Range yêu cầu")
+    spec = range_header[len("bytes=") :].strip()
+    if "," in spec:
+        raise HTTPException(status_code=416, detail="Không hỗ trợ nhiều phạm vi Range")
+    if file_size == 0:
+        # Any range on an empty file is unsatisfiable.
+        raise HTTPException(status_code=416, detail="Tệp rỗng")
+
+    if not spec:
+        # "bytes=" with no range is unsatisfiable (RFC 7233).
+        raise HTTPException(status_code=416, detail="Range không hợp lệ")
+
+    if spec.startswith("-"):
+        suffix_value = _parse_int(spec[1:])
+        if suffix_value is None or suffix_value <= 0:
+            raise HTTPException(status_code=416, detail="Suffix length không hợp lệ")
+        suffix_length = min(suffix_value, file_size)
+        start = file_size - suffix_length
+        end = file_size - 1
+    else:
+        parts = spec.split("-", 1)
+        start_value = _parse_int(parts[0])
+        if start_value is None or start_value < 0:
+            raise HTTPException(status_code=416, detail="Range không hợp lệ")
+        start = start_value
+        if start >= file_size:
+            raise HTTPException(
+                status_code=416,
+                detail="Range vượt kích thước tệp",
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+        end_value = None
+        if len(parts) > 1:
+            if parts[1] == "":
+                # "bytes=start-" is an open-ended range up to end of file.
+                end_value = None
+            else:
+                end_value = _parse_int(parts[1])
+                if end_value is None:
+                    raise HTTPException(status_code=416, detail="Range không hợp lệ")
+        end = file_size - 1 if end_value is None else end_value
+        if end_value is not None and end_value < start:
+            raise HTTPException(status_code=416, detail="Range không hợp lệ")
+        end = min(end, file_size - 1)
+
+    body = _read_range(path, start, end)
+    return Response(
+        content=body,
+        status_code=206,
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(len(body)),
+        },
+    )
 
 
 def build_video_router(
@@ -55,7 +140,7 @@ def build_video_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/api/projects/{project_id}/scenes/{scene_id}/video")
-    async def scene_video(project_id: str, scene_id: str) -> FileResponse:
+    async def scene_video(project_id: str, scene_id: str, request: Request) -> Response:
         project = required(project_id)
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if not scene or not scene.result_file:
@@ -67,7 +152,7 @@ def build_video_router(
             raise HTTPException(status_code=400, detail="Đường dẫn video không hợp lệ") from exc
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Không tìm thấy tệp video")
-        return FileResponse(target, media_type="video/mp4", filename=target.name)
+        return _serve_media_file(request, target, media_type="video/mp4", filename=target.name)
 
     @router.post("/api/projects/{project_id}/final-video", response_model=Project, status_code=202)
     async def merge_final_video(project_id: str) -> Project:
@@ -158,7 +243,7 @@ def build_video_router(
         return project
 
     @router.get("/api/projects/{project_id}/final-video/file")
-    async def final_video_file(project_id: str) -> FileResponse:
+    async def final_video_file(project_id: str, request: Request) -> Response:
         project = required(project_id)
         if project.final_video.status != "Completed" or not project.final_video.result_file:
             raise HTTPException(status_code=404, detail="Video tổng chưa hoàn tất")
@@ -171,7 +256,8 @@ def build_video_router(
             ) from exc
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Không tìm thấy tệp video tổng")
-        return FileResponse(
+        return _serve_media_file(
+            request,
             target,
             media_type="video/mp4",
             filename=f"{project.id}-final.mp4",

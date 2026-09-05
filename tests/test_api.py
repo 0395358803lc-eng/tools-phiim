@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from flow_story_studio.main import create_app
@@ -188,6 +189,69 @@ def test_scene_video_supports_browser_byte_ranges(tmp_path: Path) -> None:
     assert response.headers["content-range"] == "bytes 100-199/2048"
     assert response.headers["content-type"] == "video/mp4"
     assert response.content == target.read_bytes()[100:200]
+
+
+def _make_byte_range_scene(tmp_path: Path, client: TestClient) -> dict:
+    project_data = client.post(
+        "/api/projects/analyze",
+        json={"name": "Video Range Edge", "original_text": TEXT, "settings": {}},
+    ).json()
+    storage = ProjectStorage(tmp_path / "projects")
+    project = storage.get(project_data["id"])
+    assert project is not None
+    scene = project.scenes[0]
+    relative_path = Path("renders") / project.id / scene.id / "result.mp4"
+    target = tmp_path / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(bytes(range(256)) * 8)
+    scene.status = "Completed"
+    scene.progress = 100
+    scene.result_file = relative_path.as_posix()
+    scene.result_url = f"/api/projects/{project.id}/scenes/{scene.id}/video"
+    storage.save(project)
+    return {"url": scene.result_url, "path": target}
+
+
+@pytest.mark.parametrize(
+    "range_header,expected",
+    [
+        (None, 200),
+        ("bytes=0-99", 206),
+        ("bytes=100-", 206),
+        ("bytes=-500", 206),
+        ("bytes=100-199", 206),
+        ("bytes=0-999999999", 206),
+        ("bytes=1500-3000", 206),
+        ("bytes=3000-4000", 416),
+        ("bytes=-0", 416),
+        ("bytes=-", 416),
+        ("bytes=", 416),
+        ("bytes=abc-def", 416),
+        ("bytes=100-abc", 416),
+        ("bytes=abc-100", 416),
+        ("bytes=500-100", 416),
+        ("bytes=0-99,200-299", 416),
+        ("bytes=,", 416),
+        ("bytes=-1-", 416),
+        ("bytes=1-2-3", 416),
+        ("bytes= 100 - 199 ", 416),
+        ("items=0-99", 416),
+        ("bytes=256-256", 206),
+    ],
+)
+def test_video_range_edges(tmp_path: Path, range_header: str | None, expected: int) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    app = create_app(storage)
+    with TestClient(app) as client:
+        scene = _make_byte_range_scene(tmp_path, client)
+        headers = {"Range": range_header} if range_header is not None else {}
+        response = client.get(scene["url"], headers=headers)
+    assert response.status_code == expected
+    if expected == 206 and range_header not in (None, "bytes=256-256"):
+        assert response.headers["content-range"].startswith("bytes ")
+        assert int(response.headers["content-length"]) <= 2048
+    if expected == 416 and range_header in ("bytes=3000-4000",):
+        assert response.headers.get("content-range") == "bytes */2048"
 
 
 def test_delete_project_can_purge_generated_artifacts(tmp_path: Path) -> None:
