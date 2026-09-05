@@ -8,12 +8,35 @@ from ..models import Project, Scene
 from .segmenter import SCENE_CONTEXT_PREFIX
 
 
+def _scene_context(source_text: str) -> str:
+    stripped = source_text.lstrip()
+    if not stripped.startswith(SCENE_CONTEXT_PREFIX):
+        return ""
+    context = stripped[len(SCENE_CONTEXT_PREFIX) :]
+    if "[END CONTEXT]" in context:
+        context = context.split("[END CONTEXT]", 1)[0]
+    return context.casefold()
+
+
 def is_direct_continuation(previous: Scene | None, current: Scene) -> bool:
     if previous is None:
         return False
     if previous.location_id != current.location_id:
         return False
-    return not current.source_text.lstrip().startswith(SCENE_CONTEXT_PREFIX)
+
+    current_context = _scene_context(current.source_text)
+    if not current_context:
+        return True
+    if "song song" in current_context or "parallel" in current_context:
+        return False
+    continuous = "liên tục" in current_context or "continuous" in current_context
+    if not continuous:
+        return False
+
+    previous_context = _scene_context(previous.source_text)
+    previous_flashback = "flashback" in previous_context
+    current_flashback = "flashback" in current_context
+    return previous_flashback == current_flashback
 
 
 def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> list[str]:
