@@ -4,7 +4,7 @@ This script intentionally stops before generation. It validates authentication,
 UI controls and exact lower-priority model selection without spending credits.
 
 Usage:
-  python scripts/flow-ui-probe.py --cookie-file "C:\path\cookies.json"
+  python scripts/flow-ui-probe.py --cookie-file "C:/path/cookies.json"
 """
 
 from __future__ import annotations
