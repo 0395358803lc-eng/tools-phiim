@@ -675,5 +675,163 @@
       15,
       16
     ]
+  },
+  "audio_delivery": {
+    "1": [
+      [
+        "AN",
+        "Anh đừng đến nhà ga tối nay.",
+        "phone"
+      ],
+      [
+        "KHẢI",
+        "Em đang ở đâu?",
+        "onscreen"
+      ]
+    ],
+    "2": [],
+    "3": [],
+    "4": [],
+    "5": [
+      [
+        "KHẢI",
+        "Chuyến này đi đâu?",
+        "onscreen"
+      ],
+      [
+        "ÔNG HẢI",
+        "Ga này không có chuyến nào lúc 23:40.",
+        "onscreen"
+      ]
+    ],
+    "6": [
+      [
+        "ÔNG HẢI",
+        "Tôi đã thấy loại vé này một lần.",
+        "onscreen"
+      ],
+      [
+        "ÔNG HẢI",
+        "Sáu tháng trước.",
+        "onscreen"
+      ]
+    ],
+    "7": [],
+    "8": [
+      [
+        "KHẢI",
+        "Nếu mình đang nghe đoạn này, nghĩa là mình lại nhớ sai.",
+        "recorded"
+      ],
+      [
+        "AN",
+        "Đừng lên tàu.",
+        "recorded"
+      ]
+    ],
+    "9": [
+      [
+        "AN",
+        "Anh cứ nghĩ em là người muốn đi.",
+        "onscreen"
+      ],
+      [
+        "KHẢI",
+        "Không phải sao?",
+        "onscreen"
+      ]
+    ],
+    "10": [
+      [
+        "AN",
+        "Anh đang nhớ sai thứ tự.",
+        "onscreen"
+      ]
+    ],
+    "11": [],
+    "12": [
+      [
+        "KHẢI",
+        "Không thể nào.",
+        "onscreen"
+      ]
+    ],
+    "13": [],
+    "14": [
+      [
+        "AN",
+        "Nếu sau này anh quên chuyện tối nay, hãy nhìn vào chỗ này.",
+        "onscreen"
+      ]
+    ],
+    "15": [
+      [
+        "KHẢI",
+        "Tại sao anh lại quên?",
+        "onscreen"
+      ],
+      [
+        "AN",
+        "Vì anh là người yêu cầu em giúp anh quên.",
+        "onscreen"
+      ]
+    ],
+    "16": [
+      [
+        "AN",
+        "Khi anh sẵn sàng, hãy nghe hết bản ghi.",
+        "onscreen"
+      ]
+    ],
+    "17": [
+      [
+        "KHẢI",
+        "An không mất tích.",
+        "recorded"
+      ],
+      [
+        "KHẢI",
+        "Mình là người đã rời đi.",
+        "recorded"
+      ]
+    ],
+    "18": [
+      [
+        "KHẢI",
+        "Anh nhớ rồi.",
+        "onscreen"
+      ],
+      [
+        "AN",
+        "Vậy thì đừng lên sân ga.",
+        "phone"
+      ]
+    ],
+    "19": [
+      [
+        "AN",
+        "Anh đã tìm thấy máy ghi âm chưa?",
+        "onscreen"
+      ],
+      [
+        "KHẢI",
+        "Rồi.",
+        "phone"
+      ]
+    ],
+    "20": [],
+    "21": [
+      [
+        "AN",
+        "Anh đang đi đâu?",
+        "phone"
+      ],
+      [
+        "KHẢI",
+        "Về nhà.",
+        "onscreen"
+      ]
+    ],
+    "22": []
   }
 }
