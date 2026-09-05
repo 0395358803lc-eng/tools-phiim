@@ -43,10 +43,7 @@ def build_video_router(
         if project.settings.provider == "google-flow" and not flow.configured:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Hãy đăng nhập gflow + Chrome hoặc cấu hình cookie fallback "
-                    "trước khi tạo video"
-                ),
+                detail="Hãy kết nối và xác thực Flow CLI trước khi tạo video",
             )
         try:
             return await queue.enqueue(
