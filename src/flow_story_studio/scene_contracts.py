@@ -7,7 +7,7 @@ import json
 
 from .models import Project, Scene
 
-SCENE_CONTRACT_VERSION = 1
+SCENE_CONTRACT_VERSION = 2
 
 
 def _contract_payload(scene: Scene) -> dict[str, object]:
