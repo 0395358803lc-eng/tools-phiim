@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .models import Project
+from .scene_contracts import verify_scene_contract
 
 
 class VideoMergeError(RuntimeError):
@@ -44,6 +45,8 @@ class VideoMerger:
             if (
                 scene.status != "Accepted"
                 or scene.acceptance.status != "Accepted"
+                or not scene.ai_locked
+                or not verify_scene_contract(scene)
                 or not scene.result_file
             ):
                 incomplete.append(scene.id)
