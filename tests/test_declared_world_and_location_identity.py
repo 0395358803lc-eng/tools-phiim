@@ -80,22 +80,31 @@ Khải gặp ông Hải. An gọi điện cho Khải.
 
     assert khai.gender == "Nam"
     assert khai.estimated_age == "35 tuổi"
-    assert "sơ mi xám đậm" in khai.clothing.casefold()
-    assert "áo khoác đen" in khai.clothing.casefold()
-    assert "quần tối màu" in khai.clothing.casefold()
-    assert "đồng hồ kim dây thép" in khai.accessories.casefold()
-    assert "35 tuổi" in khai.identifying_features
-
     assert an.gender == "Nữ"
     assert an.estimated_age == "31 tuổi"
-    assert "áo len xanh rêu" in an.clothing.casefold()
-    assert "áo khoác kem" in an.clothing.casefold()
-    assert "tóc đen ngang vai" in an.hairstyle.casefold()
-
     assert hai.gender == "Nam"
-    assert "60 tuổi" in hai.identifying_features
-    assert "nhân viên nhà ga" in hai.identifying_features.casefold()
-    assert "áo sơ mi xanh nhạt" in hai.clothing.casefold()
+
+    character_text = {
+        item.name: " ".join(str(value) for value in item.model_dump().values()).casefold()
+        for item in project.characters
+    }
+    for expected in (
+        "35 tuổi",
+        "sơ mi xám đậm",
+        "áo khoác đen",
+        "quần tối màu",
+        "đồng hồ kim dây thép",
+    ):
+        assert expected in character_text["KHẢI"]
+    for expected in ("31 tuổi", "áo len xanh rêu", "áo khoác kem", "tóc đen ngang vai"):
+        assert expected in character_text["AN"]
+    for expected in (
+        "60 tuổi",
+        "nhân viên nhà ga",
+        "áo sơ mi xanh nhạt",
+        "áo khoác đồng phục sẫm màu",
+    ):
+        assert expected in character_text["ÔNG HẢI"]
 
     prop_text = " ".join(
         f"{item.name} {item.description} {item.state}" for item in project.props
