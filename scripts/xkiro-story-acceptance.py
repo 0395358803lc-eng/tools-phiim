@@ -181,6 +181,24 @@ def canonical_audio(project: Project, scenes: list[typing.Any]) -> list[tuple[st
     return events
 
 
+def canonical_audio_delivery(
+    project: Project,
+    scenes: list[typing.Any],
+) -> list[tuple[str, str, str]]:
+    by_id = {item.id: item.name for item in project.characters}
+    events: list[tuple[str, str, str]] = []
+    for scene in scenes:
+        for dialogue in scene.dialogues:
+            events.append(
+                (
+                    by_id.get(dialogue.character_id, dialogue.character_id),
+                    dialogue.text,
+                    dialogue.delivery,
+                )
+            )
+    return events
+
+
 def prop_ids_for_scene(scene: typing.Any) -> set[str]:
     values = set(scene.start_state.prop_positions) | set(scene.end_state.prop_positions)
     values.update(
@@ -477,6 +495,28 @@ def audit_project(
             error(
                 "AUDIO_SOURCE_TRUTH",
                 f"Audio mismatch. Expected={expected_audio!r}, actual={actual_audio!r}",
+                number,
+            )
+        actual_delivery = canonical_audio_delivery(project, scenes)
+        expected_delivery = [
+            (str(speaker), str(text), str(delivery))
+            for speaker, text, delivery in manifest.get("audio_delivery", {}).get(
+                str(number), []
+            )
+        ]
+        actual_delivery_counter = collections.Counter(
+            (fold(speaker), fold(text), delivery.casefold())
+            for speaker, text, delivery in actual_delivery
+        )
+        expected_delivery_counter = collections.Counter(
+            (fold(speaker), fold(text), delivery.casefold())
+            for speaker, text, delivery in expected_delivery
+        )
+        if actual_delivery_counter != expected_delivery_counter:
+            error(
+                "AUDIO_DELIVERY_SOURCE_TRUTH",
+                "Audio delivery mismatch. "
+                f"Expected={expected_delivery!r}, actual={actual_delivery!r}",
                 number,
             )
         for scene in scenes:
