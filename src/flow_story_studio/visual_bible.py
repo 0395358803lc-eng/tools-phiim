@@ -152,24 +152,13 @@ def build_visual_bible(project: Project) -> Project:
         )
         previous = scene
 
+    # Each boundary between a scene and its successor gets ONE shared note that is
+    # written identically to the previous scene's end_state and the current scene's
+    # start_state. Direct continuations copy the previous end_state into the current
+    # start_state (including notes), so keeping them byte-identical preserves the
+    # continuity invariant `current.start_state == previous.end_state` while the
+    # note still describes the frame-anchoring dependency of that single boundary.
     for index, scene in enumerate(project.scenes):
-        mode = scene.visual_plan.dependency_mode
-        if mode == "opening":
-            scene.start_state.notes = (
-                "Opening scene; establish from canonical source truth and visual references."
-            )
-        elif mode == "direct":
-            previous_scene = project.scenes[index - 1]
-            scene.start_state.notes = (
-                f"Direct continuation from {previous_scene.id}; use its accepted final frame "
-                "as the physical-state anchor."
-            )
-        else:
-            scene.start_state.notes = (
-                "Canonical cut/new beat; re-anchor to this scene's source truth and canonical "
-                "references. Do not inherit the previous final-frame composition."
-            )
-
         if index + 1 >= len(project.scenes):
             scene.end_state.notes = "Final scene; no downstream frame anchor."
             continue
@@ -179,13 +168,20 @@ def build_visual_bible(project: Project) -> Project:
             next_scene.visual_plan.dependency_mode == "direct"
             and is_direct_continuation(scene, next_scene)
         ):
-            scene.end_state.notes = (
-                f"Accepted final frame may anchor {next_scene.id} because it is a direct "
-                "continuation."
+            boundary_note = (
+                f"Direct continuation from {scene.id}; {next_scene.id} may anchor to this "
+                "accepted final frame as the physical-state anchor."
             )
         else:
-            scene.end_state.notes = (
-                f"{next_scene.id} begins as a canonical cut/new beat; do not carry this "
-                "final frame forward."
+            boundary_note = (
+                f"{next_scene.id} begins as a Canonical cut/new beat; re-anchor to source "
+                "truth and canonical references. Do not carry the previous final frame forward."
             )
+        scene.end_state.notes = boundary_note
+        next_scene.start_state.notes = boundary_note
+
+    if project.scenes:
+        project.scenes[0].start_state.notes = (
+            "Opening scene; establish from canonical source truth and visual references."
+        )
     return project
