@@ -1,19 +1,11 @@
 """Tests for flow_integration submodules."""
 
-import asyncio
 from pathlib import Path
-from types import SimpleNamespace
-
-import pytest
 
 from flow_story_studio.flow_integration import FlowCLIIntegration
-from flow_story_studio.flow_integration.browser import (
-    _ExistingChromeManager,
-    can_attach_existing_chrome,
-)
+from flow_story_studio.flow_integration.browser import can_attach_existing_chrome
 from flow_story_studio.flow_integration.catalog import VIDEO_MODELS
 from flow_story_studio.flow_integration.errors import FlowIntegrationError, RenderCheckpoint
-from flow_story_studio.flow_integration.session import FlowSession
 
 
 class TestCatalog:
@@ -83,6 +75,7 @@ class TestBrowser:
 class TestDiscovery:
     def test_discovery_module_imports(self) -> None:
         from flow_story_studio.flow_integration.discovery import _flow_cli_available
+
         assert callable(_flow_cli_available)
 
 
@@ -112,10 +105,12 @@ class TestSession:
 class TestIntegrationFacade:
     def test_integration_exports_errors(self) -> None:
         from flow_story_studio.flow_integration import FlowIntegrationError
+
         assert FlowIntegrationError is not None
 
     def test_integration_exports_video_models(self) -> None:
         from flow_story_studio.flow_integration import VIDEO_MODELS
+
         assert len(VIDEO_MODELS) > 0
 
     def test_flow_cli_integration_has_required_attributes(self, tmp_path: Path) -> None:
