@@ -9,7 +9,8 @@ import os
 import re
 import shutil
 import socket
-import subprocess  # nosec B404 - required for local gflow argv execution
+# subprocess is required for local gflow argv execution.
+import subprocess  # nosec B404
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -201,7 +202,8 @@ class FlowCLIIntegration:
             command = [self.gflow_executable, *args]
 
         def run() -> subprocess.CompletedProcess[str]:
-            return subprocess.run(  # nosec B603 - trusted executable, argv only
+            # The executable path is resolved locally and arguments stay as an argv list.
+            return subprocess.run(  # nosec B603
                 command,
                 cwd=self.gflow_workdir,
                 env=env,
@@ -419,7 +421,7 @@ class FlowCLIIntegration:
 
     async def connect(self, cookie_input: str) -> FlowConnection:
         if not _flow_cli_available():
-            raise FlowIntegrationError("Flow CLI chưa được cài hoặc đóng gói trong ứng dụng")
+            raise FlowIntegrationError("Legacy Flow CLI chưa khả dụng; cookie fallback không thể dùng")
         cookies, raw = _parse_cookie_input(cookie_input)
         from flow_cli._auth import validate_cookies
 
@@ -1128,7 +1130,9 @@ class FlowCLIIntegration:
             return await self._gflow_reference_image(project_id, reference_id, prompt)
         cookies, _ = self.vault.load()
         if not cookies:
-            raise FlowIntegrationError("Google Flow chưa được cấu hình để tạo reference image")
+            raise FlowIntegrationError(
+                "gflow + Chrome chưa sẵn sàng và chưa có cookie fallback để tạo reference image"
+            )
         client = self._client(cookies)
         model = os.getenv("FLOW_REFERENCE_IMAGE_MODEL", "nano-banana-pro")
         try:
@@ -1199,7 +1203,9 @@ class FlowCLIIntegration:
             return result
         cookies, _ = self.vault.load()
         if not cookies:
-            raise FlowIntegrationError("Hãy thêm và xác thực cookie Google Flow trước khi render")
+            raise FlowIntegrationError(
+                "gflow + Chrome chưa sẵn sàng và chưa có cookie fallback để render"
+            )
         client = self._client(cookies, project.flow_project_id or None)
         upstream_project_id = project.flow_project_id
         if not upstream_project_id:
