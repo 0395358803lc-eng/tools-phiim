@@ -358,6 +358,9 @@ class FlowConnection(StrictModel):
     cookie_count: int = 0
     message: str = ""
     flow_cli_available: bool = False
+    gflow_available: bool = False
+    gflow_profile_ready: bool = False
+    legacy_flow_cli_available: bool = False
     browser_ready: bool = False
     credits_remaining: int | None = None
     tier: str = ""
