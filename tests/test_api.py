@@ -85,6 +85,34 @@ def test_session_is_fresh_and_video_settings_are_explicit(tmp_path: Path) -> Non
         assert updated.json()["settings"]["provider"] == "google-flow"
 
 
+def test_video_settings_and_continuity_are_locked_during_render(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    app = create_app(storage)
+    with TestClient(app) as client:
+        project_data = client.post(
+            "/api/projects/analyze",
+            json={"name": "Render mutation lock", "original_text": TEXT, "settings": {}},
+        ).json()
+        project = storage.get(project_data["id"])
+        assert project is not None
+        project.scenes[0].status = "Generating"
+        storage.save(project)
+
+        settings = client.patch(
+            f"/api/projects/{project.id}/video-settings",
+            json={
+                "provider": "google-flow",
+                "video_model": "veo-3.1-lite-lower-priority",
+            },
+        )
+        assert settings.status_code == 423
+        assert "render đang chạy" in settings.json()["detail"]
+
+        continuity = client.post(f"/api/projects/{project.id}/continuity")
+        assert continuity.status_code == 423
+        assert "render đang chạy" in continuity.json()["detail"]
+
+
 def test_scene_video_supports_browser_byte_ranges(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     app = create_app(storage)
