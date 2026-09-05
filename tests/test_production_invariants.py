@@ -204,3 +204,67 @@ Alex returns to the station and looks toward the exit.
     assert all(scene.voiceover == "" for scene in project.scenes)
     assert all("Voiceover" not in item for item in project.continuity_warnings)
     assert project.continuity_score == 100
+
+
+def test_canonical_cut_resets_cross_scene_ai_state_contamination() -> None:
+    script = """
+TARGET RUNTIME: 24 seconds
+
+CHARACTERS
+- ALEX, adult man, black jacket.
+- MAYA, adult woman, cream coat.
+
+SCENE 1 — STATION HALL — NIGHT — PRESENT
+Alex stands alone beside the exit.
+
+SCENE 2 — MAYA'S APARTMENT — NIGHT — PARALLEL
+Maya sits alone by the window. Alex is only heard through the phone.
+
+SCENE 3 — STATION HALL — NIGHT — PRESENT
+Alex stands alone by the exit and tears the ticket in half. Maya is not there.
+"""
+    draft = analyze_story(
+        AnalyzeRequest(
+            name="canonical cut state reset",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    alex = next(item for item in draft.characters if item.name.casefold() == "alex")
+    maya = next(item for item in draft.characters if item.name.casefold() == "maya")
+
+    scenes = []
+    for scene in draft.scenes:
+        visible = [alex.id] if "MAYA'S APARTMENT" not in scene.source_text else [maya.id]
+        payload = _scene_payload(scene, characters=visible)
+        if "SCENE 3" in scene.source_text:
+            payload["start_state"]["character_positions"] = {
+                alex.id: "Alex is not present in frame; voice only"
+            }
+            payload["start_state"]["character_wardrobe"] = {alex.id: "not visible"}
+            payload["start_state"]["camera"] = "Close-up on Maya as she closes her eyes"
+            payload["start_state"]["notes"] = "Maya waits alone in her apartment"
+        scenes.append(payload)
+
+    project = merge_analysis(
+        draft,
+        {
+            "characters": [item.model_dump() for item in draft.characters],
+            "locations": [item.model_dump() for item in draft.locations],
+            "props": [item.model_dump() for item in draft.props],
+            "scenes": scenes,
+        },
+        "test-model",
+    )
+    final_scene = next(scene for scene in project.scenes if "SCENE 3" in scene.source_text)
+
+    assert final_scene.characters == [alex.id]
+    assert final_scene.start_state.character_wardrobe[alex.id] == alex.clothing
+    position = final_scene.start_state.character_positions[alex.id].casefold()
+    assert "not present" not in position
+    assert "voice only" not in position
+    assert "maya" not in final_scene.start_state.camera.casefold()
+    assert "maya" not in final_scene.start_state.notes.casefold()
+    assert final_scene.visual_plan.dependency_mode == "canonical"
+    assert "Canonical cut/new beat" in final_scene.flow_prompt
+    assert "Direct continuation of" not in final_scene.flow_prompt
