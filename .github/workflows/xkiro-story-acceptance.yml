@@ -27,6 +27,8 @@ jobs:
       XKIRO_REQUEST_RETRIES: "4"
       XKIRO_SCENE_BATCH_SIZE: "4"
       XKIRO_JSON_REPAIR_ATTEMPTS: "2"
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
       - uses: actions/checkout@v4
