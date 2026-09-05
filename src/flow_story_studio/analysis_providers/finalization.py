@@ -140,6 +140,63 @@ def _sanitize_camera(
     )
 
 
+def _scene_context(scene) -> str:
+    match = re.search(
+        r"\[SCENE CONTEXT\](.*?)\[END CONTEXT\]",
+        scene.source_text,
+        re.DOTALL,
+    )
+    return _key(match.group(1) if match else "")
+
+
+def _source_time_label(scene, previous_scene) -> str:
+    context = _scene_context(scene)
+    if ("lien tuc" in context or "continuous" in context) and previous_scene is not None:
+        previous_context = _scene_context(previous_scene)
+        previous_flashback = "flashback" in previous_context
+        current_flashback = "flashback" in context
+        if previous_scene.location_id == scene.location_id and previous_flashback == current_flashback:
+            return previous_scene.end_state.time
+
+    flashback = "flashback" in context
+    parallel = "song song" in context or "parallel" in context
+    daypart = ""
+    for marker, label in (
+        ("binh minh", "dawn"),
+        ("sang", "morning"),
+        ("trua", "day"),
+        ("chieu", "afternoon"),
+        ("toi", "evening"),
+        ("dem", "night"),
+        ("night", "night"),
+        ("day", "day"),
+        ("morning", "morning"),
+        ("afternoon", "afternoon"),
+        ("evening", "evening"),
+        ("dawn", "dawn"),
+        ("dusk", "dusk"),
+    ):
+        if marker in context:
+            daypart = label
+            break
+
+    if flashback:
+        return f"Flashback — {daypart or 'source-defined time'}"
+    if parallel:
+        return f"Present parallel — {daypart or 'source-defined time'}"
+    return f"Present — {daypart or 'source-defined time'}"
+
+
+def _normalize_source_timeline(project: Project) -> Project:
+    previous_scene = None
+    for scene in project.scenes:
+        label = _source_time_label(scene, previous_scene)
+        scene.start_state.time = label
+        scene.end_state.time = label
+        previous_scene = scene
+    return project
+
+
 def _assert_structural_integrity(project: Project) -> None:
     character_ids = {item.id for item in project.characters}
     location_ids = {item.id for item in project.locations}
@@ -252,6 +309,12 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             valid_prop_ids=valid_prop_ids,
         )
         previous_scene = scene
+
+    project = _normalize_source_timeline(project)
+    # Audio finalization can remove AI-authored voiceover and semantic normalization can
+    # resolve camera/cast conflicts. Recompute current continuity without mutating the
+    # already source-grounded state so stale pre-finalization warnings do not survive.
+    project = check_project(project, auto_fix=False)
 
     # Build the Visual Bible from the exact final semantic state, then compile prompts.
     project = build_visual_bible(project)
