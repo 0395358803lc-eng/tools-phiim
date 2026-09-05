@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import socket
-# subprocess is required for local gflow argv execution.
 import subprocess  # nosec B404
 import sys
 from collections.abc import Callable
@@ -421,7 +420,9 @@ class FlowCLIIntegration:
 
     async def connect(self, cookie_input: str) -> FlowConnection:
         if not _flow_cli_available():
-            raise FlowIntegrationError("Legacy Flow CLI chưa khả dụng; cookie fallback không thể dùng")
+            raise FlowIntegrationError(
+                "Legacy Flow CLI chưa khả dụng; cookie fallback không thể dùng"
+            )
         cookies, raw = _parse_cookie_input(cookie_input)
         from flow_cli._auth import validate_cookies
 
