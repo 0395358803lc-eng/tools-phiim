@@ -155,7 +155,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=args.headless)
+        channel = "chrome" if args.browser == "chrome" else None
+        browser = await playwright.chromium.launch(
+            channel=channel,
+            headless=args.headless,
+        )
         context = await browser.new_context(viewport={"width": 1440, "height": 1000})
         await context.add_cookies(cookies)
         page = await context.new_page()
@@ -242,6 +246,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cookie-file", required=True)
     parser.add_argument("--url", default=FLOW_URL)
     parser.add_argument("--settle-ms", type=int, default=3500)
+    parser.add_argument(
+        "--browser",
+        choices=("chrome", "chromium"),
+        default="chrome",
+        help="Use installed Google Chrome by default so the probe matches production.",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--report", default="data/diagnostics/flow-ui-probe.json")
     parser.add_argument("--screenshot-on-failure", default="")
