@@ -103,7 +103,7 @@ def make_flow_prompt(
     name_by_id = {item.id: item.name for item in (all_characters or characters)}
     dialogue_lines = [
         f'- {name_by_id.get(item.character_id, item.character_id)}: "{item.text}" '
-        f"[delivery/emotion: {item.emotion}]"
+        f"[delivery: {item.delivery}; emotion: {item.emotion}]"
         for item in scene.dialogues
     ]
     if scene.voiceover:
