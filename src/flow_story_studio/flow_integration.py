@@ -212,6 +212,7 @@ class FlowCLIIntegration:
                 timeout=timeout,
                 check=False,
                 creationflags=creationflags,
+                shell=False,
             )
 
         try:
