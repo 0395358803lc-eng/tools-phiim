@@ -224,6 +224,35 @@ def apply_flow_ui_compatibility(self) -> None:
     if not hasattr(flow_ui, "_studio_agent_original_get_selected_model"):
         flow_ui._studio_agent_original_get_selected_model = flow_ui.FlowUI.get_selected_model
 
+    # Preserve the vendored methods separately. Agent-aware wrappers below use
+    # compatibility fallbacks that may be refreshed on each call with the
+    # current integration instance, while raw methods must never become recursive.
+    if not hasattr(flow_ui, "_studio_raw_select_aspect"):
+        flow_ui._studio_raw_select_aspect = flow_ui._studio_agent_original_select_aspect
+    if not hasattr(flow_ui, "_studio_raw_select_duration"):
+        flow_ui._studio_raw_select_duration = flow_ui._studio_agent_original_select_duration
+    if not hasattr(flow_ui, "_studio_raw_select_output_count"):
+        flow_ui._studio_raw_select_output_count = flow_ui._studio_agent_original_select_output_count
+    if not hasattr(flow_ui, "_studio_raw_select_model"):
+        flow_ui._studio_raw_select_model = flow_ui._studio_agent_original_select_model
+    if not hasattr(flow_ui, "_studio_raw_select_image_model"):
+        flow_ui._studio_raw_select_image_model = flow_ui._studio_agent_original_select_image_model
+    if not hasattr(flow_ui, "_studio_raw_get_selected_model"):
+        flow_ui._studio_raw_get_selected_model = flow_ui._studio_agent_original_get_selected_model
+
+    async def call_media_compatible(
+        function: object,
+        ui: object,
+        value: object,
+        media_type: str,
+    ) -> None:
+        try:
+            await function(ui, value, media_type=media_type)
+        except TypeError as exc:
+            if "media_type" not in str(exc):
+                raise
+            await function(ui, value)
+
     async def agent_aware_select_aspect(
         ui: object, aspect: str, media_type: str | None = None
     ) -> None:
@@ -235,8 +264,11 @@ def apply_flow_ui_compatibility(self) -> None:
         )
         if await agent_select_toggle(ui, label, aspect):
             return
-        await flow_ui._studio_agent_original_select_aspect(
-            ui, aspect, media_type=active_media
+        await call_media_compatible(
+            flow_ui._studio_agent_original_select_aspect,
+            ui,
+            aspect,
+            active_media,
         )
 
     agent_aware_select_aspect._studio_compat = True  # type: ignore[attr-defined]
@@ -264,8 +296,11 @@ def apply_flow_ui_compatibility(self) -> None:
         if await agent_select_toggle(ui, label, f"x{count}"):
             await agent_disable_confirmation_and_save(ui)
             return
-        await flow_ui._studio_agent_original_select_output_count(
-            ui, count, media_type=active_media
+        await call_media_compatible(
+            flow_ui._studio_agent_original_select_output_count,
+            ui,
+            count,
+            active_media,
         )
 
     agent_aware_select_output_count._studio_compat = True  # type: ignore[attr-defined]
@@ -368,44 +403,52 @@ def apply_flow_ui_compatibility(self) -> None:
             raise RuntimeError(f"Could not select Flow {kind} option {label!r}")
 
     if not hasattr(flow_ui, "_studio_original_select_aspect"):
-        flow_ui._studio_original_select_aspect = flow_ui.FlowUI.select_aspect
+        flow_ui._studio_original_select_aspect = flow_ui._studio_agent_original_select_aspect
+    if not hasattr(flow_ui, "_studio_radix_select_aspect"):
 
-    if not getattr(flow_ui.FlowUI.select_aspect, "_studio_compat", False):
-
-        async def select_aspect(ui: object, aspect: str) -> None:
-            if self._active_media_type == "image":
+        async def radix_select_aspect(
+            ui: object, aspect: str, media_type: str | None = None
+        ) -> None:
+            active_media = media_type or self._active_media_type
+            if active_media == "image":
                 await ui._click_tool_toggle("image")
                 await flow_ui._studio_original_select_aspect(ui, aspect)
                 return
             await select_video_tab_option(ui, aspect, "aspect")
 
-        select_aspect._studio_compat = True  # type: ignore[attr-defined]
-        flow_ui.FlowUI.select_aspect = select_aspect
+        radix_select_aspect._studio_compat = True  # type: ignore[attr-defined]
+        flow_ui._studio_radix_select_aspect = radix_select_aspect
+    flow_ui._studio_agent_original_select_aspect = flow_ui._studio_radix_select_aspect
 
-    if not getattr(flow_ui.FlowUI.select_duration, "_studio_compat", False):
+    if not hasattr(flow_ui, "_studio_radix_select_duration"):
 
-        async def select_duration(ui: object, duration: int) -> None:
+        async def radix_select_duration(ui: object, duration: int) -> None:
             await select_video_tab_option(ui, f"{duration}s", "duration")
 
-        select_duration._studio_compat = True  # type: ignore[attr-defined]
-        flow_ui.FlowUI.select_duration = select_duration
+        radix_select_duration._studio_compat = True  # type: ignore[attr-defined]
+        flow_ui._studio_radix_select_duration = radix_select_duration
+    flow_ui._studio_agent_original_select_duration = flow_ui._studio_radix_select_duration
 
     if not hasattr(flow_ui, "_studio_original_select_output_count"):
-        flow_ui._studio_original_select_output_count = flow_ui.FlowUI.select_output_count
+        flow_ui._studio_original_select_output_count = (
+            flow_ui._studio_agent_original_select_output_count
+        )
+    if not hasattr(flow_ui, "_studio_radix_select_output_count"):
 
-    if not getattr(flow_ui.FlowUI.select_output_count, "_studio_compat", False):
-
-        async def select_output_count(ui: object, count: int) -> None:
-            if self._active_media_type == "image":
+        async def radix_select_output_count(
+            ui: object, count: int, media_type: str | None = None
+        ) -> None:
+            active_media = media_type or self._active_media_type
+            if active_media == "image":
                 await flow_ui._studio_original_select_output_count(ui, count)
                 return
             await select_video_tab_option(ui, f"x{count}", "output count")
 
-        select_output_count._studio_compat = True  # type: ignore[attr-defined]
-        flow_ui.FlowUI.select_output_count = select_output_count
-
-    if getattr(flow_ui.FlowUI.select_model, "_studio_compat", False):
-        return
+        radix_select_output_count._studio_compat = True  # type: ignore[attr-defined]
+        flow_ui._studio_radix_select_output_count = radix_select_output_count
+    flow_ui._studio_agent_original_select_output_count = (
+        flow_ui._studio_radix_select_output_count
+    )
 
     async def select_video_model(ui: object, model: str) -> None:
         await ensure_video_settings(ui)
@@ -485,4 +528,5 @@ def apply_flow_ui_compatibility(self) -> None:
         raise RuntimeError(f"Could not find model {model!r}{detail}; visible controls={labels}")
 
     select_video_model._studio_compat = True  # type: ignore[attr-defined]
-    flow_ui.FlowUI.select_model = select_video_model
+    flow_ui._studio_radix_select_model = select_video_model
+    flow_ui._studio_agent_original_select_model = flow_ui._studio_radix_select_model

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 from pathlib import Path
 
@@ -85,6 +86,50 @@ def _last_finite(pattern: str, text: str) -> float | None:
         if math.isfinite(number):
             return number
     return None
+
+
+async def _normalize_audio(
+    ffmpeg: str,
+    source: Path,
+    target: Path,
+    *,
+    target_lufs: float,
+    max_peak: float,
+) -> tuple[bool, str]:
+    filter_spec = (
+        f"loudnorm=I={target_lufs:.1f}:TP={max_peak:.1f}:LRA=11,"
+        "aresample=48000"
+    )
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c:v",
+        "copy",
+        "-af",
+        filter_spec,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(target),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, error = await process.communicate()
+    detail = error.decode("utf-8", errors="replace").strip()[-500:]
+    ok = process.returncode == 0 and target.is_file() and target.stat().st_size > 0
+    return ok, detail
 
 
 async def _measure_audio(ffmpeg: str, video: Path) -> tuple[str, int]:
@@ -224,3 +269,46 @@ class AudioQCAnalyzer:
             model_id="ffmpeg-ebur128",
             issues=issues,
         )
+
+
+NORMALIZABLE_AUDIO_CODES = {
+    "LOUDNESS_OUT_OF_RANGE",
+    "TRUE_PEAK_TOO_HIGH",
+    "AUDIO_SAMPLE_RATE_LOW",
+}
+
+
+def can_normalize_audio(report: AudioQCReport) -> bool:
+    if report.status != "Failed" or not report.audio_present:
+        return False
+    codes = {issue.code for issue in report.issues}
+    return bool(codes) and codes <= NORMALIZABLE_AUDIO_CODES
+
+
+async def normalize_scene_audio(
+    data_root: Path,
+    scene: Scene,
+) -> tuple[bool, str]:
+    video = _safe_media_path(data_root, scene.result_file)
+    if video is None:
+        return False, "Rendered video file is missing for audio normalization."
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg:
+        return False, "FFmpeg is unavailable for audio normalization."
+    target_lufs, max_peak, _tolerance = _audio_targets(scene)
+    temporary = video.with_name(video.stem + ".audio-normalized.tmp.mp4")
+    temporary.unlink(missing_ok=True)
+    try:
+        ok, detail = await _normalize_audio(
+            ffmpeg,
+            video,
+            temporary,
+            target_lufs=target_lufs,
+            max_peak=max_peak,
+        )
+        if not ok:
+            return False, detail or "FFmpeg audio normalization failed."
+        os.replace(temporary, video)
+        return True, ""
+    finally:
+        temporary.unlink(missing_ok=True)

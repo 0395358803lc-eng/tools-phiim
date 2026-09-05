@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .analysis_providers.xkiro import XKiroClient
-from .audio_qc import AudioQCAnalyzer
+from .audio_qc import AudioQCAnalyzer, can_normalize_audio, normalize_scene_audio
 from .engines.continuity import is_direct_continuation
 from .engines.quality import score_scene
 from .film.state_delta import (
@@ -29,6 +29,7 @@ from .models import (
 )
 from .production_gate import is_scene_production_ready, scene_production_score_floor
 from .providers.mock import MockProvider
+from .qc_repair import build_repair_instruction, can_auto_retry
 from .reference_manager import ReferenceManager, promote_accepted_scene_references
 from .scene_contracts import verify_scene_contract
 from .storage import ProjectStorage
@@ -127,6 +128,9 @@ class RenderQueue:
                     scene.upstream_workflow_id = ""
                     scene.upstream_media_id = ""
                     scene.upstream_resource_name = ""
+                    scene.render_attempt = 0
+                    scene.runtime_repair_instruction = ""
+                    scene.repair_history = []
                 scene.warnings = [
                     warning
                     for warning in scene.warnings
@@ -147,14 +151,29 @@ class RenderQueue:
             return "Scene Packet contract không còn khớp dữ liệu đã seal"
         return ""
 
-    def _dependency_block_reason(self, project: Project, scene: Scene) -> str:
+    def _dependency_predecessor(self, project: Project, scene: Scene) -> Scene | None:
         if scene.visual_plan.dependency_mode != "direct" or scene.order <= 1:
-            return ""
+            return None
         previous = next(
             (item for item in project.scenes if item.order == scene.order - 1),
             None,
         )
         if not previous or not is_direct_continuation(previous, scene):
+            return None
+        return previous
+
+    def _dependency_should_defer(self, project: Project, scene: Scene) -> bool:
+        previous = self._dependency_predecessor(project, scene)
+        if previous is None or self._is_finally_accepted(project, previous):
+            return False
+        return (
+            previous.id in self._queued_ids[project.id]
+            and previous.status in {"Waiting", "Preparing", "Generating", "QC", "Paused"}
+        )
+
+    def _dependency_block_reason(self, project: Project, scene: Scene) -> str:
+        previous = self._dependency_predecessor(project, scene)
+        if previous is None:
             return ""
         if not self._is_finally_accepted(project, previous):
             return f"Phụ thuộc scene {previous.order} chưa được Accepted"
@@ -254,6 +273,17 @@ class RenderQueue:
             return
 
         scene.audio_qc = await self.audio.inspect_scene(project, scene)
+        if can_normalize_audio(scene.audio_qc):
+            normalized, detail = await normalize_scene_audio(self.data_root, scene)
+            if normalized:
+                scene.audio_qc = await self.audio.inspect_scene(project, scene)
+            else:
+                scene.audio_qc.issues.append(
+                    VisualIssue(
+                        code="AUDIO_NORMALIZATION_FAILED",
+                        message=detail[:500],
+                    )
+                )
 
         if not self.vision:
             scene.visual_qc.status = "Unavailable"
@@ -297,6 +327,7 @@ class RenderQueue:
         async with self._locks[project_id]:
             while not queue.empty():
                 scene_id = await queue.get()
+                requeued = False
                 try:
                     await self._event(project_id).wait()
                     project = self.storage.get(project_id)
@@ -313,6 +344,12 @@ class RenderQueue:
                         )
                         scene.warnings.append(f"Blocked: {contract_reason}")
                         await self._update(project, scene, "Blocked", 0)
+                        continue
+
+                    if self._dependency_should_defer(project, scene):
+                        scene.status = "Waiting"
+                        await queue.put(scene_id)
+                        requeued = True
                         continue
 
                     dependency_reason = self._dependency_block_reason(project, scene)
@@ -342,6 +379,8 @@ class RenderQueue:
                     if not project:
                         return
                     scene = next(item for item in project.scenes if item.id == scene_id)
+                    scene.render_attempt += 1
+                    self.storage.save(project)
                     await self._update(project, scene, "Generating", 35)
                     provider = (
                         self.flow if project.settings.provider == "google-flow" else MockProvider()
@@ -373,6 +412,7 @@ class RenderQueue:
                     accepted = scene.acceptance.status == "Accepted"
                     if accepted:
                         commit_accepted_runtime_state(scene)
+                        scene.runtime_repair_instruction = ""
                     await self._update(
                         project,
                         scene,
@@ -380,7 +420,43 @@ class RenderQueue:
                         100 if accepted else 85,
                     )
                     if not accepted:
-                        scene.warnings.append("Visual QC: " + "; ".join(scene.acceptance.reasons))
+                        scene.warnings.append(
+                            "Production QC: " + "; ".join(scene.acceptance.reasons)
+                        )
+                        repair_instruction = build_repair_instruction(scene)
+                        if (
+                            project.settings.provider == "google-flow"
+                            and repair_instruction
+                            and can_auto_retry(scene)
+                        ):
+                            scene.runtime_repair_instruction = repair_instruction
+                            scene.repair_history.append(repair_instruction)
+                            scene.provider_job_id = ""
+                            scene.upstream_workflow_id = ""
+                            scene.upstream_media_id = ""
+                            scene.upstream_resource_name = ""
+                            scene.result_url = ""
+                            scene.result_file = ""
+                            scene.last_frame_file = ""
+                            scene.render_provider = ""
+                            scene.render_model = ""
+                            clear_accepted_runtime_state(scene)
+                            scene.visual_qc = VisualQCReport()
+                            scene.audio_qc = AudioQCReport()
+                            scene.continuity_qc = ContinuityQCReport()
+                            scene.acceptance = ProductionAcceptance(
+                                status="Pending",
+                                reasons=[
+                                    f"Auto repair attempt {scene.render_attempt + 1} scheduled"
+                                ],
+                            )
+                            await self._update(project, scene, "Waiting", 0)
+                            await queue.put(scene_id)
+                            requeued = True
+                            continue
+                        scene.warnings.append(
+                            "Manual review required after QC failure or retry budget exhaustion"
+                        )
                         self.storage.save(project)
                         continue
 
@@ -416,7 +492,8 @@ class RenderQueue:
                             )
                             await self._update(project, scene, "Failed", 0)
                 finally:
-                    self._queued_ids[project_id].discard(scene_id)
+                    if not requeued:
+                        self._queued_ids[project_id].discard(scene_id)
                     queue.task_done()
 
     async def _update(self, project: Project, scene: Scene, status: str, progress: int) -> None:

@@ -78,7 +78,11 @@ async def _generate_video(self, client: Any, **kwargs: Any) -> Any:
 
 
 def _prompt(scene: Scene) -> str:
-    return flow_prompt(scene)
+    base = flow_prompt(scene)
+    repair = scene.runtime_repair_instruction.strip()
+    if not repair:
+        return base
+    return base + "\n\nRUNTIME QC REPAIR INSTRUCTION:\n" + repair
 
 
 def _reference_path(self, value: str) -> str | None:

@@ -30,6 +30,8 @@ data/debug/
 .flow-story-studio.lock
 .xkiro_*_checkpoint
 .xkiro_acceptance_screenplay.*
+acceptance/live-results/
+acceptance/live-workspace/
 
 # Google Flow / browser authentication runtime
 scripts/_flow_cli_cookies.json

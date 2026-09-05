@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -63,3 +66,70 @@ def can_attach_existing_chrome(port_file: Path) -> bool:
             return True
     except (OSError, ValueError, IndexError):
         return False
+
+def default_flow_chrome_profile() -> Path:
+    local_app_data = os.getenv("LOCALAPPDATA")
+    base = (
+        Path(local_app_data)
+        if local_app_data
+        else Path.home() / "AppData" / "Local"
+    )
+    return (base / "TH Media" / "Flow Chrome").resolve()
+
+
+def find_chrome_executable() -> Path | None:
+    candidates = [
+        Path(os.getenv("PROGRAMFILES", r"C:\Program Files"))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(os.getenv("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+        Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        / "Google"
+        / "Chrome"
+        / "Application"
+        / "chrome.exe",
+    ]
+    return next((item.resolve() for item in candidates if item.is_file()), None)
+
+
+def launch_flow_chrome(
+    profile_root: Path,
+    *,
+    url: str = "https://flow.google.com/",
+    timeout: float = 8.0,
+) -> Path:
+    """Launch a dedicated consent-enabled Chrome profile and return its CDP port file."""
+    profile = profile_root.resolve()
+    port_file = profile / "DevToolsActivePort"
+    if can_attach_existing_chrome(port_file):
+        return port_file
+    chrome = find_chrome_executable()
+    if chrome is None:
+        raise RuntimeError("Google Chrome is not installed")
+    profile.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(  # noqa: S603
+        [
+            str(chrome),
+            "--remote-debugging-port=0",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            url,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if can_attach_existing_chrome(port_file):
+            return port_file
+        time.sleep(0.1)
+    raise RuntimeError(
+        "Chrome Flow session started but the DevTools endpoint did not become ready"
+    )

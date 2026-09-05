@@ -40,6 +40,13 @@ def build_integration_router(
         except FlowIntegrationError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
+    @router.post("/api/video/flow/browser/start", response_model=FlowConnection)
+    async def flow_browser_start() -> FlowConnection:
+        try:
+            return await flow.start_browser_session()
+        except FlowIntegrationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     @router.delete("/api/video/flow", response_model=FlowConnection)
     async def flow_disconnect() -> FlowConnection:
         try:

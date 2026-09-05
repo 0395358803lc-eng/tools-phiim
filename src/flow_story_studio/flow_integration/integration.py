@@ -17,6 +17,7 @@ its historical method surface so callers and tests are unaffected.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -27,7 +28,11 @@ from ..models import FlowConnection, Project, Scene
 from ..providers.base import RenderResult
 from . import generation, recovery
 from . import session as session_module
-from .browser import can_attach_existing_chrome
+from .browser import (
+    can_attach_existing_chrome,
+    default_flow_chrome_profile,
+    launch_flow_chrome,
+)
 from .catalog import VIDEO_MODELS
 from .errors import FlowIntegrationError, RenderCheckpoint
 from .session import FlowSession
@@ -55,20 +60,27 @@ class FlowCLIIntegration:
         self.timeout = timeout or int(os.getenv("FLOW_RENDER_TIMEOUT", "900"))
         self._force_headed_browser = False
         self._active_media_type = "video"
-        self._chrome_port_file = Path(
-            os.getenv(
-                "FLOW_CHROME_DEVTOOLS_ACTIVE_PORT",
-                str(
-                    Path.home()
-                    / "AppData"
-                    / "Local"
-                    / "Google"
-                    / "Chrome"
-                    / "User Data"
-                    / "DevToolsActivePort"
-                ),
+        self._flow_chrome_profile = Path(
+            os.getenv("FLOW_CHROME_PROFILE", str(default_flow_chrome_profile()))
+        ).resolve()
+        explicit_port = os.getenv("FLOW_CHROME_DEVTOOLS_ACTIVE_PORT", "").strip()
+        if explicit_port:
+            self._chrome_port_file = Path(explicit_port).expanduser().resolve()
+        else:
+            legacy_port = (
+                Path.home()
+                / "AppData"
+                / "Local"
+                / "Google"
+                / "Chrome"
+                / "User Data"
+                / "DevToolsActivePort"
             )
-        )
+            self._chrome_port_file = (
+                legacy_port
+                if can_attach_existing_chrome(legacy_port)
+                else self._flow_chrome_profile / "DevToolsActivePort"
+            )
 
     @property
     def configured(self) -> bool:
@@ -94,7 +106,32 @@ class FlowCLIIntegration:
         return session_module._browser_ready()
 
     async def status(self, *, verify: bool = False) -> FlowConnection:
-        return await self.session.status(verify=verify)
+        connection = await self.session.status(verify=verify)
+        connection.cdp_ready = self._can_attach_existing_chrome()
+        connection.interactive_login_required = (
+            not connection.authenticated and not connection.cdp_ready
+        )
+        return connection
+
+    async def start_browser_session(self) -> FlowConnection:
+        if not self._can_attach_existing_chrome():
+            try:
+                port_file = await asyncio.to_thread(
+                    launch_flow_chrome,
+                    self._flow_chrome_profile,
+                )
+            except RuntimeError as exc:
+                raise FlowIntegrationError(str(exc)) from exc
+            self._chrome_port_file = port_file
+        connection = await self.status(verify=False)
+        connection.cdp_ready = self._can_attach_existing_chrome()
+        connection.interactive_login_required = not connection.cdp_ready
+        if connection.cdp_ready:
+            connection.message = (
+                "Chrome Flow profile đã mở và sẵn sàng cho CDP; "
+                "hãy đăng nhập Google Flow trong cửa sổ Chrome nếu cần."
+            )
+        return connection
 
     async def connect(self, cookie_input: str) -> FlowConnection:
         return await self.session.connect(cookie_input)

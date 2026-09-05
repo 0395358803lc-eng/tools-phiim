@@ -129,6 +129,20 @@ async def _select_lower_priority(page: Any, trigger: Any) -> str:
     return trigger_text
 
 
+async def _enter_flow_app(page: Any) -> bool:
+    """Move from the public /about landing page into the authenticated editor."""
+    if urlparse(page.url).path.casefold().rstrip("/") != "/about":
+        return False
+    create = page.get_by_role("button", name="Create with Google Flow", exact=True).first
+    if not await _visible(create, 800):
+        create = page.get_by_role("button", name="Try in Google Flow", exact=True).first
+    if not await _visible(create, 800):
+        return False
+    await create.click(timeout=3000)
+    await page.wait_for_timeout(2500)
+    return True
+
+
 async def _detect_variant(page: Any) -> str:
     if await _visible(page.locator('button[aria-label="Settings"]').first):
         return "agent-or-settings"
@@ -165,9 +179,17 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         page = await context.new_page()
         await page.goto(args.url, wait_until="domcontentloaded", timeout=45_000)
         await page.wait_for_timeout(args.settle_ms)
+        landing_entry_attempted = await _enter_flow_app(page)
 
-        host = urlparse(page.url).hostname or ""
-        authenticated = "accounts.google." not in host
+        parsed_url = urlparse(page.url)
+        host = parsed_url.hostname or ""
+        path = parsed_url.path.casefold().rstrip("/") or "/"
+        signed_out_surface = (
+            "accounts.google." in host
+            or path == "/about"
+            or path.startswith("/about/")
+        )
+        authenticated = host == "flow.google.com" and not signed_out_surface
         variant = await _detect_variant(page)
         prompt_editor = page.locator(
             '[contenteditable="true"]:visible, textarea:visible, '
@@ -203,6 +225,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         result = {
             "authenticated": authenticated,
             "host": host,
+            "path": path,
+            "landing_entry_attempted": landing_entry_attempted,
             "ui_variant": variant,
             "prompt_editor_found": prompt_editor_found,
             "aspect_16_9_found": aspect_found,

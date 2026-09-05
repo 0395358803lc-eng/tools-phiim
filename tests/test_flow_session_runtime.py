@@ -184,3 +184,92 @@ async def test_existing_chrome_manager_rejects_incomplete_port_file(tmp_path: Pa
 
     with pytest.raises(RuntimeError, match="incomplete"):
         await manager.start()
+
+
+def test_browser_ready_uses_bundled_playwright_chromium(monkeypatch, tmp_path: Path) -> None:
+    browser = tmp_path / "chromium-123" / "chrome-win" / "chrome.exe"
+    browser.parent.mkdir(parents=True)
+    browser.write_bytes(b"chrome")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    monkeypatch.setattr(session_module, "_flow_cli_available", lambda: True)
+
+    assert session_module._browser_ready() is True
+
+
+@pytest.mark.asyncio
+async def test_existing_chrome_manager_attaches_and_disconnects_cleanly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from playwright import async_api
+
+    context = object()
+    calls: list[str] = []
+
+    class FakeBrowser:
+        contexts = [context]
+
+    class FakeChromium:
+        async def connect_over_cdp(self, endpoint: str):
+            calls.append(endpoint)
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        async def stop(self) -> None:
+            calls.append("stop")
+
+    class FakeStarter:
+        async def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(async_api, "async_playwright", lambda: FakeStarter())
+    port_file = tmp_path / "DevToolsActivePort"
+    port_file.write_text("9222\n/devtools/browser/session\n", encoding="utf-8")
+
+    manager = _ExistingChromeManager(port_file)
+    started = await manager.start()
+
+    assert started is manager
+    assert manager.context is context
+    assert calls[0] == "ws://127.0.0.1:9222/devtools/browser/session"
+    await manager.stop()
+    assert calls[-1] == "stop"
+    assert manager.context is None
+
+
+@pytest.mark.asyncio
+async def test_existing_chrome_manager_fails_closed_when_no_contexts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from playwright import async_api
+
+    stopped: list[bool] = []
+
+    class FakeBrowser:
+        contexts: list[object] = []
+
+    class FakeChromium:
+        async def connect_over_cdp(self, _endpoint: str):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    class FakeStarter:
+        async def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr(async_api, "async_playwright", lambda: FakeStarter())
+    port_file = tmp_path / "DevToolsActivePort"
+    port_file.write_text("9222\n/devtools/browser/session\n", encoding="utf-8")
+
+    manager = _ExistingChromeManager(port_file)
+    with pytest.raises(RuntimeError, match="no browser context"):
+        await manager.start()
+
+    assert stopped == [True]
+    assert manager.context is None

@@ -392,6 +392,8 @@ class FlowConnection(StrictModel):
     message: str = ""
     flow_cli_available: bool = False
     browser_ready: bool = False
+    cdp_ready: bool = False
+    interactive_login_required: bool = False
     credits_remaining: int | None = None
     tier: str = ""
     models: list[FlowVideoModel] = Field(default_factory=list)

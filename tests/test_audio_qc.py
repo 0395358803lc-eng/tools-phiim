@@ -185,3 +185,95 @@ def test_audio_qc_parsers_and_invalid_targets_fall_back(tmp_path) -> None:
 
     assert audio_qc._last_finite(r"I:\s*([-+]?\w+(?:\.\d+)?)", "I: -inf\nI: -16.5") == -16.5
     assert audio_qc._last_finite(r"I:\s*([-+]?\w+(?:\.\d+)?)", "I: nope") is None
+
+
+@pytest.mark.asyncio
+async def test_audio_normalization_atomically_replaces_only_audio_container(
+    monkeypatch, tmp_path
+) -> None:
+    project, scene = _project_and_scene(tmp_path)
+    source = tmp_path / scene.result_file
+    original = source.read_bytes()
+    captured = {}
+
+    async def fake_normalize(
+        ffmpeg,
+        current_source,
+        target,
+        *,
+        target_lufs,
+        max_peak,
+    ):
+        captured.update(
+            ffmpeg=ffmpeg,
+            source=current_source,
+            target_lufs=target_lufs,
+            max_peak=max_peak,
+        )
+        target.write_bytes(b"normalized-media")
+        return True, ""
+
+    monkeypatch.setattr(audio_qc, "ffmpeg_path", lambda: "ffmpeg")
+    monkeypatch.setattr(audio_qc, "_normalize_audio", fake_normalize)
+
+    ok, detail = await audio_qc.normalize_scene_audio(tmp_path, scene)
+
+    assert ok is True
+    assert detail == ""
+    assert captured["source"] == source.resolve()
+    assert captured["target_lufs"] == -16.0
+    assert captured["max_peak"] == -1.0
+    assert source.read_bytes() == b"normalized-media"
+    assert source.read_bytes() != original
+    assert not source.with_name(source.stem + ".audio-normalized.tmp.mp4").exists()
+
+
+@pytest.mark.asyncio
+async def test_audio_normalization_failure_preserves_original(monkeypatch, tmp_path) -> None:
+    _project, scene = _project_and_scene(tmp_path)
+    source = tmp_path / scene.result_file
+    original = source.read_bytes()
+
+    async def fake_normalize(_ffmpeg, _source, target, **_kwargs):
+        target.write_bytes(b"partial")
+        return False, "normalizer failed"
+
+    monkeypatch.setattr(audio_qc, "ffmpeg_path", lambda: "ffmpeg")
+    monkeypatch.setattr(audio_qc, "_normalize_audio", fake_normalize)
+
+    ok, detail = await audio_qc.normalize_scene_audio(tmp_path, scene)
+
+    assert ok is False
+    assert detail == "normalizer failed"
+    assert source.read_bytes() == original
+    assert not source.with_name(source.stem + ".audio-normalized.tmp.mp4").exists()
+
+
+def test_only_technical_audio_drift_is_locally_normalizable() -> None:
+    from flow_story_studio.models import AudioQCReport, VisualIssue
+
+    normalizable = AudioQCReport(
+        status="Failed",
+        score=40,
+        audio_present=True,
+        issues=[
+            VisualIssue(code="LOUDNESS_OUT_OF_RANGE"),
+            VisualIssue(code="TRUE_PEAK_TOO_HIGH"),
+        ],
+    )
+    missing_audio = AudioQCReport(
+        status="Failed",
+        score=0,
+        audio_present=False,
+        issues=[VisualIssue(code="AUDIO_STREAM_MISSING")],
+    )
+    semantic_unknown = AudioQCReport(
+        status="Failed",
+        score=20,
+        audio_present=True,
+        issues=[VisualIssue(code="DIALOGUE_MISMATCH")],
+    )
+
+    assert audio_qc.can_normalize_audio(normalizable) is True
+    assert audio_qc.can_normalize_audio(missing_audio) is False
+    assert audio_qc.can_normalize_audio(semantic_unknown) is False
