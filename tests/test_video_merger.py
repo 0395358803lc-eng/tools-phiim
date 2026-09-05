@@ -6,7 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from flow_story_studio.main import create_app
-from flow_story_studio.models import AnalyzeRequest, FinalVideo
+from flow_story_studio.models import (
+    AnalyzeRequest,
+    ContinuityQCReport,
+    FinalVideo,
+    QualityReport,
+    VisualQCReport,
+)
 from flow_story_studio.service import StudioService
 from flow_story_studio.storage import ProjectStorage
 from flow_story_studio.video_merger import (
@@ -32,6 +38,24 @@ def completed_project(storage: ProjectStorage, data_root: Path):
         scene.progress = 100
         scene.acceptance.status = "Accepted"
         scene.acceptance.score = 100
+        scene.quality = QualityReport()
+        scene.visual_qc = VisualQCReport(
+            status="Passed",
+            score=100,
+            character_identity=100,
+            location_identity=100,
+            prop_consistency=100,
+            wardrobe_consistency=100,
+            lighting_consistency=100,
+            action_consistency=100,
+            composition_consistency=100,
+            model_id="mock",
+        )
+        scene.continuity_qc = (
+            ContinuityQCReport(status="Passed", score=100, model_id="mock")
+            if scene.visual_plan.dependency_mode == "direct"
+            else ContinuityQCReport(status="NotApplicable", score=100, model_id="mock")
+        )
         scene.result_file = clip.relative_to(data_root).as_posix()
     return storage.save(project)
 
@@ -157,3 +181,29 @@ def test_interrupted_merge_is_restored_to_ready_on_restart(tmp_path: Path) -> No
         restored = client.get(f"/api/projects/{project.id}")
     assert restored.status_code == 200
     assert restored.json()["final_video"]["status"] == "Ready"
+
+def test_merger_rejects_tampered_acceptance_without_qc_evidence(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    scene = project.scenes[0]
+    scene.visual_qc.status = "Failed"
+    scene.acceptance.status = "Accepted"
+    scene.status = "Accepted"
+
+    with pytest.raises(VideoMergeError, match="chưa có tệp video hoàn chỉnh"):
+        VideoMerger(tmp_path).clips_for(project)
+
+
+def test_merger_rejects_low_visual_component_even_when_acceptance_flag_is_accepted(
+    tmp_path: Path,
+) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    scene = project.scenes[0]
+    scene.visual_qc.prop_consistency = 40
+    scene.visual_qc.score = 96
+    scene.acceptance.status = "Accepted"
+    scene.acceptance.score = 96
+
+    with pytest.raises(VideoMergeError, match="chưa có tệp video hoàn chỉnh"):
+        VideoMerger(tmp_path).clips_for(project)
