@@ -30,7 +30,6 @@ data/analysis-checkpoints/
 .xkiro_acceptance_screenplay.*
 
 # Google Flow / browser authentication runtime
-.gflow/
 scripts/_flow_cli_cookies.json
 scripts/*cookies*.json
 
