@@ -9,8 +9,19 @@ from .analysis_providers.xkiro import XKiroClient
 from .engines.analyzer import analyze_story
 from .engines.continuity import check_project
 from .engines.prompt_generator import make_flow_prompt, make_visual_prompt
-from .models import AnalyzeRequest, FinalVideo, Project, ReorderRequest, SceneUpdate
+from .models import (
+    AnalyzeRequest,
+    ContinuityQCReport,
+    FinalVideo,
+    ProductionAcceptance,
+    Project,
+    ReorderRequest,
+    Scene,
+    SceneUpdate,
+    VisualQCReport,
+)
 from .scene_contracts import (
+    compute_scene_contract_hash,
     invalidate_scene_contract,
     seal_project_contracts,
     verify_scene_contract,
@@ -46,6 +57,53 @@ def _recompile_project_prompts(project: Project) -> Project:
     return project
 
 
+def _contract_signatures(project: Project) -> dict[str, tuple[int, str]]:
+    return {
+        scene.id: (scene.contract_version, scene.contract_hash)
+        for scene in project.scenes
+    }
+
+
+def _invalidate_render_evidence(scene: Scene) -> None:
+    scene.status = "Waiting"
+    scene.progress = 0
+    scene.result_url = ""
+    scene.result_file = ""
+    scene.last_frame_file = ""
+    scene.provider_job_id = ""
+    scene.upstream_project_id = ""
+    scene.upstream_workflow_id = ""
+    scene.upstream_media_id = ""
+    scene.upstream_resource_name = ""
+    scene.quality = None
+    scene.visual_qc = VisualQCReport()
+    scene.continuity_qc = ContinuityQCReport()
+    scene.acceptance = ProductionAcceptance()
+    scene.warnings = [
+        warning
+        for warning in scene.warnings
+        if not warning.startswith(("Render failed:", "Visual QC:", "Blocked:"))
+    ]
+
+
+def _invalidate_changed_contract_evidence(
+    project: Project,
+    previous: dict[str, tuple[int, str]],
+    *,
+    resealed: bool,
+) -> None:
+    for scene in project.scenes:
+        if resealed:
+            current = (scene.contract_version, scene.contract_hash)
+        else:
+            current = (scene.contract_version, compute_scene_contract_hash(scene))
+        if previous.get(scene.id) == current:
+            continue
+        _invalidate_render_evidence(scene)
+        if not resealed:
+            invalidate_scene_contract(scene)
+
+
 class StudioService:
     def __init__(self, storage: ProjectStorage) -> None:
         self.storage = storage
@@ -76,6 +134,7 @@ class StudioService:
 
     def update_scene(self, project_id: str, scene_id: str, patch: SceneUpdate) -> Project:
         project = self.get_required(project_id)
+        previous_contracts = _contract_signatures(project)
         scene_index = next(
             (index for index, scene in enumerate(project.scenes) if scene.id == scene_id), None
         )
@@ -139,15 +198,11 @@ class StudioService:
         if protected:
             project = build_visual_bible(project)
             project = _recompile_project_prompts(project)
-            for item in project.scenes:
-                if item.order >= scene.order:
-                    invalidate_scene_contract(item)
-                if item.status not in {"Preparing", "Generating", "QC"}:
-                    item.status = "Waiting"
-                    item.progress = 0
-                    item.visual_qc.status = "Pending"
-                    item.continuity_qc.status = "NotApplicable"
-                    item.acceptance.status = "Pending"
+            _invalidate_changed_contract_evidence(
+                project,
+                previous_contracts,
+                resealed=False,
+            )
         return self.storage.save(project)
 
     def set_scene_lock(self, project_id: str, scene_id: str, locked: bool) -> Project:
@@ -168,6 +223,7 @@ class StudioService:
 
     def reorder(self, project_id: str, request: ReorderRequest) -> Project:
         project = self.get_required(project_id)
+        previous_contracts = _contract_signatures(project)
         current = {scene.id: scene for scene in project.scenes}
         requested = request.scene_ids
         if (
@@ -181,21 +237,26 @@ class StudioService:
         project = build_visual_bible(project)
         project = _recompile_project_prompts(project)
         project = seal_project_contracts(project)
-        for scene in project.scenes:
-            scene.status = "Waiting"
-            scene.progress = 0
-            scene.visual_qc.status = "Pending"
-            scene.continuity_qc.status = "NotApplicable"
-            scene.acceptance.status = "Pending"
+        _invalidate_changed_contract_evidence(
+            project,
+            previous_contracts,
+            resealed=True,
+        )
         project.final_video = FinalVideo(status="NotReady")
         return self.storage.save(project)
 
     def check_continuity(self, project_id: str, auto_fix: bool | None = None) -> Project:
         project = self.get_required(project_id)
+        previous_contracts = _contract_signatures(project)
         use_auto_fix = project.settings.auto_continuity if auto_fix is None else auto_fix
         project = check_project(project, auto_fix=use_auto_fix)
         project = build_visual_bible(project)
         project = _recompile_project_prompts(project)
         project = seal_project_contracts(project)
+        _invalidate_changed_contract_evidence(
+            project,
+            previous_contracts,
+            resealed=True,
+        )
         project.final_video = FinalVideo(status="NotReady")
         return self.storage.save(project)
