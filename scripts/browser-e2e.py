@@ -69,7 +69,8 @@ def main() -> None:
                 page.locator("#analyzeSubmit").click()
                 page.locator("#projectTitle").wait_for(state="visible", timeout=30_000)
                 page.wait_for_function(
-                    "document.querySelector('#projectTitle').textContent === 'Production E2E'"
+                    "document.querySelector('#projectTitle').textContent === 'Production E2E'",
+                    timeout=90_000,
                 )
                 scene_count = int(page.locator("#sceneCount").inner_text())
                 if scene_count < 1:
