@@ -175,6 +175,23 @@ def test_accepted_anchor_promotes_and_resolves_visual_references(tmp_path: Path)
     assert resolve_scene_reference(project, scene, tmp_path) == middle.as_posix()
 
 
+@pytest.mark.asyncio
+async def test_mock_post_render_qc_stamps_render_settings_identity(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = analyze_story(AnalyzeRequest(name="render identity", original_text=SCRIPT))
+    scene = project.scenes[0]
+
+    class FakeFlow:
+        configured = True
+
+    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    await queue._post_render_qc(project, scene)
+
+    assert scene.acceptance.status == "Accepted"
+    assert scene.render_provider == project.settings.provider
+    assert scene.render_model == project.settings.video_model
+
+
 def test_direct_scene_is_blocked_until_predecessor_is_accepted(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     project = analyze_story(AnalyzeRequest(name="dependency", original_text=SCRIPT))
