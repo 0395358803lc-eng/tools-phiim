@@ -339,7 +339,10 @@ class FlowCLIIntegration:
             return False
 
     async def status(self, *, verify: bool = False) -> FlowConnection:
-        if self._gflow_profile_ready():
+        gflow_available = bool(self.gflow_executable)
+        gflow_profile_ready = self._gflow_profile_ready()
+        legacy_available = _flow_cli_available()
+        if gflow_profile_ready:
             connection = FlowConnection(
                 configured=True,
                 authenticated=False,
@@ -347,6 +350,9 @@ class FlowCLIIntegration:
                 cookie_count=0,
                 message="gflow Chrome profile is ready",
                 flow_cli_available=True,
+                gflow_available=gflow_available,
+                gflow_profile_ready=True,
+                legacy_flow_cli_available=legacy_available,
                 browser_ready=True,
                 models=VIDEO_MODELS,
             )
@@ -361,7 +367,7 @@ class FlowCLIIntegration:
                 except FlowIntegrationError as exc:
                     connection.message = str(exc)
             return connection
-        available = _flow_cli_available()
+
         legacy_configured = self.vault.path.is_file()
         cookies, _ = self._load_cookies() if legacy_configured else ({}, None)
         connection = FlowConnection(
@@ -369,18 +375,32 @@ class FlowCLIIntegration:
             authenticated=False,
             transport="legacy-cookie" if cookies else "none",
             cookie_count=len(cookies),
-            message="Chưa thêm cookie Google Flow",
-            flow_cli_available=available,
+            message="Chưa cấu hình Google Flow",
+            flow_cli_available=gflow_available or legacy_available,
+            gflow_available=gflow_available,
+            gflow_profile_ready=False,
+            legacy_flow_cli_available=legacy_available,
             browser_ready=self._browser_ready(),
             models=VIDEO_MODELS,
         )
-        if not available:
-            connection.message = "Flow CLI chưa được đóng gói/cài đặt"
-            return connection
         if not cookies:
+            if gflow_available:
+                connection.message = (
+                    "gflow đã được cài nhưng chưa có Chrome profile; "
+                    "hãy chạy 'gflow auth login', sau đó 'gflow doctor'"
+                )
+            elif legacy_available:
+                connection.message = (
+                    "gflow chưa sẵn sàng; có thể cấu hình cookie fallback legacy nếu cần"
+                )
+            else:
+                connection.message = "Chưa cài gflow và legacy Flow CLI cũng không khả dụng"
+            return connection
+        if not legacy_available:
+            connection.message = "Đã có cookie fallback nhưng legacy Flow CLI không khả dụng"
             return connection
         if not verify:
-            connection.message = "Đã lưu cookie an toàn; nhấn kiểm tra để xác thực"
+            connection.message = "Đã lưu cookie fallback; nhấn kiểm tra để xác thực"
             return connection
         from flow_cli._auth import validate_cookies
 
@@ -393,8 +413,8 @@ class FlowCLIIntegration:
                 credits = await client.get_credits()
                 connection.credits_remaining = credits.remaining
                 connection.tier = credits.tier or ""
-            except Exception:  # nosec B110
-                pass
+            except Exception as exc:
+                logger.debug("Unable to load Google Flow credits: %s", exc)
         return connection
 
     async def connect(self, cookie_input: str) -> FlowConnection:
