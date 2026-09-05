@@ -90,10 +90,17 @@ def make_flow_prompt(
     if dependency_mode == "opening":
         continuity = "Opening scene; establish the canonical story world."
     elif dependency_mode == "direct" and previous_scene_id:
-        continuity = (
-            f"Direct continuation of {previous_scene_id}; begin from that scene's accepted "
-            "final frame and preserve physical state."
-        )
+        if scene.visual_plan.inherit_previous_frame:
+            continuity = (
+                f"Direct continuation of {previous_scene_id}; begin from that scene's accepted "
+                "final frame and preserve physical state."
+            )
+        else:
+            continuity = (
+                f"Continuous story beat after {previous_scene_id}, but do not use its accepted "
+                "final frame as a literal start-frame anchor. Re-anchor to this scene's "
+                "source-truth start state because the authored boundary changes physical state."
+            )
     else:
         continuity = (
             "Canonical cut/new beat; re-anchor to this scene's source truth and canonical "
@@ -119,6 +126,7 @@ Continuity:
 VISUAL BIBLE LOCKS:
 {scene.visual_plan.lock_prompt or "Use canonical project visual identity without redesign."}
 Dependency mode: {scene.visual_plan.dependency_mode};
+Inherit previous frame: {str(scene.visual_plan.inherit_previous_frame).lower()};
 anchor scene: {scene.visual_plan.anchor_scene_id or scene.id}.
 
 Character:
@@ -166,9 +174,11 @@ Consistency requirements:
 Reproduce the exact same face geometry, age, body proportions, hairstyle, hair color, skin tone,
 wardrobe and accessories for every recurring character. Reproduce the exact same architecture,
 room layout, fixed objects, palette, weather and light sources. Preserve source-grounded prop state
-and screen direction. Only when Dependency mode is direct may the previous accepted final frame be
-used as the next start-frame anchor; canonical cuts must start from this scene's own source truth
-and canonical references. No redesign or improvisation of locked attributes. Natural physics and
+and screen direction. The previous accepted final frame may be used as a literal next start-frame
+anchor only when Inherit previous frame is true. A direct story continuation with that flag false
+must re-anchor to this scene's source-truth start state and canonical references. Canonical cuts
+must also start from their own source truth and canonical references. No redesign or improvisation
+of locked attributes. Natural physics and
 object permanence. Duration
 {scene.duration} seconds, aspect ratio composition inherited from project settings.
 
