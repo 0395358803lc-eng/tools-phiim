@@ -39,6 +39,24 @@ def is_direct_continuation(previous: Scene | None, current: Scene) -> bool:
     return previous_flashback == current_flashback
 
 
+def can_inherit_previous_frame(previous: Scene | None, current: Scene) -> bool:
+    """Return whether a previous final frame is a safe literal start-frame anchor."""
+    if previous is None or not is_direct_continuation(previous, current):
+        return False
+    if set(previous.characters) != set(current.characters):
+        return False
+
+    previous_state = previous.end_state
+    current_state = current.start_state
+    return (
+        previous_state.character_positions == current_state.character_positions
+        and previous_state.character_wardrobe == current_state.character_wardrobe
+        and previous_state.prop_positions == current_state.prop_positions
+        and previous_state.time == current_state.time
+        and previous_state.weather == current_state.weather
+    )
+
+
 def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> list[str]:
     warnings: list[str] = []
     character_ids = {item.id for item in project.characters}
