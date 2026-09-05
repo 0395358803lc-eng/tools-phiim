@@ -15,6 +15,7 @@ import unicodedata
 
 from flow_story_studio.analysis_providers.xkiro import XKiroClient
 from flow_story_studio.models import AnalyzeRequest, Project, VideoSettings
+from flow_story_studio.scene_contracts import verify_scene_contract
 
 
 TERM_ALTERNATIVES: dict[str, tuple[str, ...]] = {
@@ -178,6 +179,24 @@ def canonical_audio(project: Project, scenes: list[typing.Any]) -> list[tuple[st
     for scene in scenes:
         for dialogue in scene.dialogues:
             events.append((by_id.get(dialogue.character_id, dialogue.character_id), dialogue.text))
+    return events
+
+
+def canonical_audio_delivery(
+    project: Project,
+    scenes: list[typing.Any],
+) -> list[tuple[str, str, str]]:
+    by_id = {item.id: item.name for item in project.characters}
+    events: list[tuple[str, str, str]] = []
+    for scene in scenes:
+        for dialogue in scene.dialogues:
+            events.append(
+                (
+                    by_id.get(dialogue.character_id, dialogue.character_id),
+                    dialogue.text,
+                    dialogue.delivery,
+                )
+            )
     return events
 
 
@@ -349,6 +368,12 @@ def audit_project(
                 )
             if not scene.ai_locked:
                 error("AI_LOCK", f"Scene {scene.id} is not AI continuity locked", number)
+            if not verify_scene_contract(scene):
+                error(
+                    "SCENE_CONTRACT",
+                    f"{scene.id} Scene Packet contract hash is missing or stale",
+                    number,
+                )
             for item in scene.warnings:
                 if "response incomplete; retained deterministic source-truth scene data" in item:
                     provider_fallback_scenes.add(scene.id)
@@ -479,6 +504,28 @@ def audit_project(
                 f"Audio mismatch. Expected={expected_audio!r}, actual={actual_audio!r}",
                 number,
             )
+        actual_delivery = canonical_audio_delivery(project, scenes)
+        expected_delivery = [
+            (str(speaker), str(text), str(delivery))
+            for speaker, text, delivery in manifest.get("audio_delivery", {}).get(
+                str(number), []
+            )
+        ]
+        actual_delivery_counter = collections.Counter(
+            (fold(speaker), fold(text), delivery.casefold())
+            for speaker, text, delivery in actual_delivery
+        )
+        expected_delivery_counter = collections.Counter(
+            (fold(speaker), fold(text), delivery.casefold())
+            for speaker, text, delivery in expected_delivery
+        )
+        if actual_delivery_counter != expected_delivery_counter:
+            error(
+                "AUDIO_DELIVERY_SOURCE_TRUTH",
+                "Audio delivery mismatch. "
+                f"Expected={expected_delivery!r}, actual={actual_delivery!r}",
+                number,
+            )
         for scene in scenes:
             if scene.voiceover.strip():
                 error(
@@ -493,10 +540,12 @@ def audit_project(
                 "production_shots": [scene.id for scene in scenes],
                 "visible_cast_by_shot": shot_visible,
                 "audio": actual_audio,
+                "audio_delivery": actual_delivery,
                 "prop_references": [
                     prop_name_by_id.get(item, item) for item in sorted(referenced_prop_ids)
                 ],
                 "dependency_modes": [scene.visual_plan.dependency_mode for scene in scenes],
+                "contract_hashes": [scene.contract_hash for scene in scenes],
             }
         )
 
