@@ -150,7 +150,8 @@ Judge only what is visually observable. Detect wrong identity, wrong location, w
 wardrobe drift, lighting/time drift, extra characters or major composition violations.
 Return exactly one JSON object with integer scores 0-100: character_identity,
 location_identity, prop_consistency, wardrobe_consistency, lighting_consistency,
-action_consistency, composition_consistency, score, and issues. issues is an array of objects with code,
+action_consistency, composition_consistency, score, and issues.
+issues is an array of objects with code,
 severity ('warning' or 'error'), message. score must reflect production acceptability.
 """
         try:
