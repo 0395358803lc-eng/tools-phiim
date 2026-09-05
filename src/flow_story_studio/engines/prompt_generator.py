@@ -86,11 +86,19 @@ def make_flow_prompt(
     previous_scene_id: str | None,
     all_characters: list[Character] | None = None,
 ) -> str:
-    continuity = (
-        f"Direct continuation of {previous_scene_id}."
-        if previous_scene_id
-        else "Opening scene; establish the canonical story world."
-    )
+    dependency_mode = scene.visual_plan.dependency_mode
+    if dependency_mode == "opening":
+        continuity = "Opening scene; establish the canonical story world."
+    elif dependency_mode == "direct" and previous_scene_id:
+        continuity = (
+            f"Direct continuation of {previous_scene_id}; begin from that scene's accepted "
+            "final frame and preserve physical state."
+        )
+    else:
+        continuity = (
+            "Canonical cut/new beat; re-anchor to this scene's source truth and canonical "
+            "references. Do not copy the previous scene's composition or final frame."
+        )
     character_text = "\n".join(describe_character(item) for item in characters)
     name_by_id = {item.id: item.name for item in (all_characters or characters)}
     dialogue_lines = [
@@ -157,9 +165,11 @@ End frame:
 Consistency requirements:
 Reproduce the exact same face geometry, age, body proportions, hairstyle, hair color, skin tone,
 wardrobe and accessories for every recurring character. Reproduce the exact same architecture,
-room layout, fixed objects, palette, weather and light sources. Maintain props, screen direction
-and the final frame of the previous scene. No redesign or improvisation of locked attributes.
-Natural physics and object permanence. Duration
+room layout, fixed objects, palette, weather and light sources. Preserve source-grounded prop state
+and screen direction. Only when Dependency mode is direct may the previous accepted final frame be
+used as the next start-frame anchor; canonical cuts must start from this scene's own source truth
+and canonical references. No redesign or improvisation of locked attributes. Natural physics and
+object permanence. Duration
 {scene.duration} seconds, aspect ratio composition inherited from project settings.
 
 Avoid:
