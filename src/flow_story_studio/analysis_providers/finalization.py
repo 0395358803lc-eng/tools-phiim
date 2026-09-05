@@ -155,7 +155,9 @@ def _source_time_label(scene, previous_scene) -> str:
         previous_context = _scene_context(previous_scene)
         previous_flashback = "flashback" in previous_context
         current_flashback = "flashback" in context
-        if previous_scene.location_id == scene.location_id and previous_flashback == current_flashback:
+        same_location = previous_scene.location_id == scene.location_id
+        same_timeline = previous_flashback == current_flashback
+        if same_location and same_timeline:
             return previous_scene.end_state.time
 
     flashback = "flashback" in context
