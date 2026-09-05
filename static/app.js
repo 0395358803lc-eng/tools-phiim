@@ -308,7 +308,7 @@ function syncVideoElement(stage, url, mediaKey, maxHeight = null) {
 function renderQueue() {
   const scenes = state.project?.scenes || [];
   $("#queueList").innerHTML = scenes.map((scene) => `<article class="queue-item"><header><code>${scene.id}</code><span>${scene.status}</span></header><div class="progress"><i style="width:${scene.progress}%"></i></div><p>${escapeHtml(scene.summary)}</p>${["Failed", "FailedQC"].includes(scene.status) ? `<button class="secondary-btn full retry-btn" data-retry="${scene.id}" data-force="${scene.status === "FailedQC" ? "true" : "false"}" style="margin-top:9px">${scene.status === "FailedQC" ? "Force rerender" : "Recover / retry"}</button>` : ""}</article>`).join("") || `<div class="empty-copy">Hàng đợi trống.</div>`;
-  $(".retry-btn").forEach((button) => button.onclick = () => generate([button.dataset.retry], button.dataset.force === "true"));
+  $$(".retry-btn").forEach((button) => button.onclick = () => generate([button.dataset.retry], button.dataset.force === "true"));
 }
 
 function finalVideoReady() {
