@@ -1,6 +1,6 @@
 # TH Media
 
-Ứng dụng Windows desktop biến một văn bản dài thành **story world → story bible → timeline → storyboard → Google Flow prompts → chuỗi video** có continuity. Giao diện chạy trong cửa sổ riêng bằng WebView2. Backend nội bộ nằm trong EXE; Google Flow ưu tiên `gflow` + Chrome profile thật, còn Python Flow CLI/cookie chỉ là fallback legacy.
+Ứng dụng Windows desktop biến một văn bản dài thành **story world → story bible → timeline → storyboard → Google Flow prompts → chuỗi video** có continuity. Giao diện chạy trong cửa sổ riêng bằng WebView2. Backend nội bộ nằm trong EXE; Google Flow dùng duy nhất Python Flow CLI tích hợp cùng phiên xác thực được lưu mã hóa trên máy.
 
 ## Tính năng đã triển khai
 
@@ -24,10 +24,10 @@
 - Start frame/End frame, continuity state, auto continuity và cảnh báo downstream khi sửa scene.
 - Chỉnh nội dung, location, camera, ánh sáng, voiceover, prompt và duration từng scene.
 - Queue render tuần tự; Generate Selected/All, Pause, Resume và Retry qua nút Generate scene.
-- Google Flow ưu tiên `gflow` + Google Chrome thật; Python Flow CLI/cookie được giữ làm fallback legacy. Kết quả MP4 vẫn được tải về workspace và đi qua cùng QC/Acceptance.
+- Google Flow dùng duy nhất Flow CLI tích hợp để render, tạo reference image và recovery. Kết quả MP4 được tải về workspace và đi qua cùng QC/Acceptance.
 - Nếu API tải media của Flow trả sai preview hoặc CDN từ chối, Studio tự phục hồi MP4 qua phiên Chromium đã đăng nhập, kiểm tra container rồi mới đánh dấu scene hoàn tất.
 - Flow project ID và workflow/media ID được lưu ngay khi gửi lệnh; tác vụ gián đoạn có thể tiếp tục tải kết quả mà không tạo lại video. `Generate all` bỏ qua scene đã hoàn tất.
-- API key xKiro và cookie Flow fallback được mã hóa bằng Windows DPAPI. gflow dùng Chrome profile riêng trên máy; profile/cookie runtime không được commit vào Git.
+- API key xKiro và phiên xác thực Flow CLI được mã hóa bằng Windows DPAPI; cookie/runtime không được commit vào Git.
 - Chọn model Veo, xem trạng thái xác thực/credit, gắn ảnh tham chiếu và phát video ngay trên scene.
 - Trình phát giữ nguyên thẻ media, thời điểm phát và bộ đệm khi hàng đợi polling tiến độ; các scene tiếp theo có thể render mà không làm video đang xem tải lại liên tục.
 - Tự trích last frame bằng FFmpeg và chuyển thành reference image cho scene kế tiếp.
@@ -41,12 +41,10 @@
 ```powershell
 cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
-gflow auth login
-gflow doctor
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-`setup.ps1` cài Python dependencies, Playwright Chromium, kiểm tra/cài Node.js LTS + Google Chrome qua winget khi cần và cài cố định `@swissmarley/gflow-cli@1.1.1`. Lần đầu cần chạy `gflow auth login` bằng Chrome bình thường và xác nhận `gflow doctor` thành công. Sau đó `start.ps1` chỉ kiểm tra môi trường và mở **TH Media**. Trước tiên, ứng dụng yêu cầu chọn hoặc tạo thư mục làm việc. Các thư mục `projects`, `renders` và `references`
+`setup.ps1` cài Python dependencies, wheel Flow CLI đã vendored và Playwright Chromium. Sau đó `start.ps1` mở **TH Media**. Trước tiên, ứng dụng yêu cầu chọn hoặc tạo thư mục làm việc. Các thư mục `projects`, `renders` và `references`
 sẽ được tạo bên trong thư mục này. Kho xác thực dùng chung nằm trong vùng dữ liệu người dùng của
 TH Media và được Windows mã hóa. Không cần chạy `flow api serve` và không cần mở
 trình duyệt thủ công.
@@ -66,12 +64,12 @@ Google Flow được cấu hình ở bước **Thiết lập video**, chỉ mở
 
 Luồng chính:
 
-1. Chạy `setup.ps1` để có Node.js 20+, Google Chrome và gflow 1.1.1.
-2. Chạy `gflow auth login`, đăng nhập Google trong cửa sổ Chrome bình thường và hoàn tất 2FA nếu có.
-3. Chạy `gflow doctor`; chỉ tiếp tục khi phiên Chrome được xác nhận sẵn sàng.
-4. Mở TH Media, chọn Google Flow, nhấn **Kiểm tra**, chọn model rồi Generate scene/selected/all.
+1. Chạy `setup.ps1` để cài Flow CLI và Playwright Chromium.
+2. Mở TH Media, chọn Google Flow và kết nối phiên Flow CLI bằng cookie/cookies.json.
+3. Nhấn **Kiểm tra** để xác thực phiên và đọc credit/model.
+4. Chọn model rồi Generate scene/selected/all.
 
-Ô **Cookie fallback** chỉ dành cho transport Python Flow CLI legacy khi gflow + Chrome profile không sẵn sàng. Không nhập email hay mật khẩu Google vào Studio. Cookie fallback không được trả lại frontend, không lưu trong project JSON và được DPAPI mã hóa theo tài khoản Windows hiện tại.
+Thông tin xác thực Flow CLI không được trả lại frontend, không lưu trong project JSON và được DPAPI mã hóa theo tài khoản Windows hiện tại. Không nhập email hay mật khẩu Google vào Studio.
 
 Các biến môi trường tùy chọn:
 
@@ -91,7 +89,7 @@ cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
 powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 ```
 
-Kết quả: `dist\THMedia.exe`. Bản one-file chứa Python legacy Flow CLI, Chromium Playwright, giao diện và FFmpeg. **Hiện EXE chưa bundle Node.js + gflow**, vì vậy máy dùng transport chính vẫn cần Node.js 20+, Google Chrome và `@swissmarley/gflow-cli@1.1.1` (có thể provision bằng `setup.ps1`).
+Kết quả: `dist\THMedia.exe`. Bản one-file chứa Python Flow CLI, Chromium Playwright, giao diện và FFmpeg; không cần Node.js/npm hoặc transport phụ.
 
 ## Phân tích nội dung bằng xKiro
 
@@ -150,7 +148,7 @@ API local liên quan:
 src/flow_story_studio/
 ├── engines/              # analyze, segment, prompt, continuity, quality
 ├── providers/            # contract và mock provider
-├── flow_integration.py   # gflow primary + legacy cookie fallback + recovery/download
+├── flow_integration.py   # Flow CLI transport + recovery/download
 ├── desktop.py            # cửa sổ Windows WebView2 + backend loopback
 ├── main.py               # các route nội bộ + static UI
 ├── models.py             # canonical project schema
@@ -159,11 +157,11 @@ src/flow_story_studio/
 ├── service.py            # application use cases
 └── storage.py            # atomic JSON persistence
 static/                   # giao diện web nội bộ
-vendor/                   # Python legacy Flow CLI wheel vendored; gflow primary cài qua npm
+vendor/                   # Python Flow CLI wheel vendored
 tests/                    # engine, storage, API tests
 data/projects/            # project runtime (không commit)
 ```
 
 ## Giới hạn có chủ đích
 
-Engine offline dùng quy tắc ngôn ngữ nên phù hợp để chạy ngay và kiểm tra workflow. Tích hợp Google Flow là automation UI không chính thức: `gflow` + Chrome profile là transport chính, còn cookie/Python Flow CLI chỉ là fallback. Google có thể thay đổi UI nên image/video/reference/recovery cần regression test sau mỗi lần cập nhật transport. Tài khoản vẫn phải có quyền sử dụng model/credit tương ứng.
+Engine offline dùng quy tắc ngôn ngữ nên phù hợp để chạy ngay và kiểm tra workflow. Tích hợp Google Flow là automation UI không chính thức thông qua Flow CLI. Google có thể thay đổi UI nên image/video/reference/recovery cần regression test sau mỗi lần cập nhật transport. Tài khoản vẫn phải có quyền sử dụng model/credit tương ứng.
