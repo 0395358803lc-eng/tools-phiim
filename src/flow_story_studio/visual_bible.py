@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .engines.continuity import is_direct_continuation
+from .engines.continuity import can_inherit_previous_frame, is_direct_continuation
 from .models import Project, SceneVisualPlan, VisualBible, VisualReference
 
 
@@ -144,6 +144,7 @@ def build_visual_bible(project: Project) -> Project:
         relevant.extend(by_entity[pid].lock_text for pid in prop_ids if pid in by_entity)
         scene.visual_plan = SceneVisualPlan(
             dependency_mode=mode,
+            inherit_previous_frame=direct and can_inherit_previous_frame(previous, scene),
             anchor_scene_id=current_anchor,
             character_reference_ids=char_refs,
             location_reference_id=loc_ref,
