@@ -10,8 +10,40 @@ from .engines.analyzer import analyze_story
 from .engines.continuity import check_project
 from .engines.prompt_generator import make_flow_prompt, make_visual_prompt
 from .models import AnalyzeRequest, FinalVideo, Project, ReorderRequest, SceneUpdate
+from .scene_contracts import (
+    invalidate_scene_contract,
+    seal_project_contracts,
+    verify_scene_contract,
+)
 from .storage import ProjectStorage
 from .visual_bible import build_visual_bible
+
+
+def _recompile_project_prompts(project: Project) -> Project:
+    location_by_id = {item.id: item for item in project.locations}
+    for index, scene in enumerate(project.scenes):
+        location = location_by_id[scene.location_id]
+        characters = [item for item in project.characters if item.id in scene.characters]
+        scene.visual_prompt = make_visual_prompt(
+            action=scene.action,
+            characters=characters,
+            location=location,
+            camera=scene.camera,
+            lighting=scene.lighting,
+            atmosphere=scene.atmosphere,
+            style=project.visual_style,
+            start_state=scene.start_state,
+            end_state=scene.end_state,
+        )
+        scene.flow_prompt = make_flow_prompt(
+            scene,
+            characters=characters,
+            location=location,
+            visual_style=project.visual_style,
+            all_characters=project.characters,
+            previous_scene_id=project.scenes[index - 1].id if index else None,
+        )
+    return project
 
 
 class StudioService:
@@ -106,7 +138,10 @@ class StudioService:
         project = check_project(project, auto_fix=False)
         if protected:
             project = build_visual_bible(project)
+            project = _recompile_project_prompts(project)
             for item in project.scenes:
+                if item.order >= scene.order:
+                    invalidate_scene_contract(item)
                 if item.status not in {"Preparing", "Generating", "QC"}:
                     item.status = "Waiting"
                     item.progress = 0
@@ -120,6 +155,11 @@ class StudioService:
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if not scene:
             raise KeyError(scene_id)
+        if locked and not verify_scene_contract(scene):
+            raise PermissionError(
+                "Scene Packet đã thay đổi sau lần duyệt gần nhất; "
+                "hãy chạy Continuity để tái biên dịch và seal contract trước"
+            )
         scene.ai_locked = locked
         scene.ai_lock_reason = (
             "AI đã duyệt dữ liệu scene và continuity" if locked else "Người dùng đã mở khóa"
@@ -139,6 +179,8 @@ class StudioService:
         project.scenes = [deepcopy(current[scene_id]) for scene_id in request.scene_ids]
         project = check_project(project, auto_fix=project.settings.auto_continuity)
         project = build_visual_bible(project)
+        project = _recompile_project_prompts(project)
+        project = seal_project_contracts(project)
         for scene in project.scenes:
             scene.status = "Waiting"
             scene.progress = 0
@@ -153,5 +195,7 @@ class StudioService:
         use_auto_fix = project.settings.auto_continuity if auto_fix is None else auto_fix
         project = check_project(project, auto_fix=use_auto_fix)
         project = build_visual_bible(project)
+        project = _recompile_project_prompts(project)
+        project = seal_project_contracts(project)
         project.final_video = FinalVideo(status="NotReady")
         return self.storage.save(project)

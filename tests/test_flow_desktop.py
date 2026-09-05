@@ -10,6 +10,7 @@ from flow_story_studio.main import create_app
 from flow_story_studio.models import AnalyzeRequest, FlowConnection, VideoSettings
 from flow_story_studio.providers.base import RenderResult
 from flow_story_studio.render_queue import RenderQueue
+from flow_story_studio.scene_contracts import seal_scene_contract
 from flow_story_studio.service import StudioService
 from flow_story_studio.storage import ProjectStorage
 
@@ -368,6 +369,7 @@ def test_render_queue_does_not_chain_reference_across_scene_cut(tmp_path: Path) 
         pytest.skip("Need at least two scenes")
     project.settings.provider = "google-flow"
     project.scenes[1].source_text = f"{SCENE_CONTEXT_PREFIX}CUT [END CONTEXT]\nnew beat"
+    seal_scene_contract(project.scenes[1])
     storage.save(project)
     seen_references: list[str] = []
 

@@ -13,6 +13,7 @@ import unicodedata
 from ..engines.continuity import check_project, is_direct_continuation
 from ..engines.prompt_generator import make_flow_prompt, make_visual_prompt
 from ..models import Character, ContinuityState, Location, Project, Prop
+from ..scene_contracts import seal_project_contracts
 from ..visual_bible import build_visual_bible
 from .audio_finalization import finalize_audio
 from .semantic_orchestrator import (
@@ -432,4 +433,4 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
         )
 
     _assert_structural_integrity(project)
-    return project
+    return seal_project_contracts(project)

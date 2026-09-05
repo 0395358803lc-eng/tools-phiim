@@ -127,6 +127,8 @@ def build_project_router(
             raise HTTPException(
                 status_code=404, detail="Không tìm thấy project hoặc scene"
             ) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
 
     @router.post("/api/projects/{project_id}/scenes/{scene_id}/reference", response_model=Project)
     async def upload_reference(project_id: str, scene_id: str, request: Request) -> Project:

@@ -234,6 +234,8 @@ class Scene(StrictModel):
     visual_qc: VisualQCReport = Field(default_factory=VisualQCReport)
     continuity_qc: ContinuityQCReport = Field(default_factory=ContinuityQCReport)
     acceptance: ProductionAcceptance = Field(default_factory=ProductionAcceptance)
+    contract_version: int = 1
+    contract_hash: str = ""
     ai_locked: bool = False
     ai_lock_reason: str = "Scene cũ chưa được AI Continuity Lock duyệt"
 
