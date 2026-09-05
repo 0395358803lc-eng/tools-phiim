@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import os
 import re
 import shutil
 import socket
-import subprocess
+import subprocess  # nosec B404 - required for local gflow argv execution
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +26,8 @@ from .flow_helpers import (
 from .flow_media import extract_last_frame, ffmpeg_path
 from .models import FlowConnection, FlowVideoModel, Project, Scene
 from .providers.base import RenderResult
+
+logger = logging.getLogger(__name__)
 
 VIDEO_MODELS = [
     FlowVideoModel(
@@ -99,8 +102,8 @@ class _ExistingChromeManager:
         if self._playwright:
             try:
                 await self._playwright.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Playwright disconnect cleanup failed: %s", exc)
         self._playwright = None
         self._browser = None
         self.context = None
@@ -187,17 +190,18 @@ class FlowCLIIntegration:
                 / "index.js"
             )
             node = shutil.which("node")
-            if node and entrypoint.is_file():
-                command = [node, str(entrypoint), *args]
-            else:
-                command_line = subprocess.list2cmdline([self.gflow_executable, *args])
-                command = ["cmd.exe", "/d", "/s", "/c", command_line]
+            if not node or not entrypoint.is_file():
+                raise FlowIntegrationError(
+                    "gflow Windows launcher requires Node.js and the installed gflow entrypoint; "
+                    "refusing cmd.exe fallback"
+                )
+            command = [node, str(entrypoint), *args]
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             command = [self.gflow_executable, *args]
 
         def run() -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
+            return subprocess.run(  # nosec B603 - trusted executable, argv only
                 command,
                 cwd=self.gflow_workdir,
                 env=env,
@@ -473,8 +477,8 @@ class FlowCLIIntegration:
                 settings_label = ui.page.get_by_text("Agent settings", exact=True).first
                 if await settings_label.is_visible(timeout=300):
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Flow Agent settings label probe failed: %s", exc)
             try:
                 button = ui.page.locator('button[aria-label="Settings"]').first
                 if not await button.is_visible(timeout=700):
@@ -550,7 +554,8 @@ class FlowCLIIntegration:
                         return True
                 except RuntimeError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Flow Agent model candidate %r failed: %s", candidate, exc)
                     continue
             await ui.page.keyboard.press("Escape")
             raise RuntimeError(f"Could not select Flow Agent model {model!r}")
@@ -664,8 +669,8 @@ class FlowCLIIntegration:
                 picker = ui.page.locator(f'button[aria-label="{label}"]').first
                 if await picker.is_visible(timeout=500):
                     return (await picker.inner_text()).replace("arrow_drop_down", "").strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Flow Agent selected-model probe failed: %s", exc)
             return await flow_ui._studio_agent_original_get_selected_model(ui)
 
         flow_ui.FlowUI.get_selected_model = agent_aware_get_selected_model
@@ -679,8 +684,8 @@ class FlowCLIIntegration:
                     if await start.is_visible(timeout=700) and not await start.is_disabled():
                         await start.click(timeout=5000)
                         return
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Flow Agent start-generation button fallback: %s", exc)
                 await original_click_generate(ui)
 
             click_generate._studio_agent_compat = True  # type: ignore[attr-defined]
