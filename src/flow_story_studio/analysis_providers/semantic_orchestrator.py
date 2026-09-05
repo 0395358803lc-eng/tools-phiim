@@ -153,6 +153,27 @@ def source_canonical_world(
     declared_props = _declared_props(project.original_text)
     heading_locations = _heading_locations(project.original_text)
 
+    def source_locked_overrides(source_item):
+        if isinstance(source_item, Character):
+            baseline = Character(id=source_item.id, name=source_item.name)
+            return {
+                field: value
+                for field, value in source_item.model_dump().items()
+                if field not in {"id", "name"} and value != getattr(baseline, field)
+            }
+        if isinstance(source_item, Prop):
+            baseline = Prop(
+                id=source_item.id,
+                name=source_item.name,
+                description=f"{source_item.name} xuất hiện trong nội dung gốc",
+            )
+            return {
+                field: value
+                for field, value in source_item.model_dump().items()
+                if field not in {"id", "name"} and value != getattr(baseline, field)
+            }
+        return {}
+
     def enrich_source_items(source_items, ai_items, allowed_names=None):
         result = []
         seen = set()
@@ -169,9 +190,10 @@ def source_canonical_world(
             if enriched is None:
                 result.append(source_item)
                 continue
-            result.append(
-                enriched.model_copy(update={"id": source_item.id, "name": source_item.name})
-            )
+            merged = enriched.model_dump()
+            merged.update(source_locked_overrides(source_item))
+            merged.update({"id": source_item.id, "name": source_item.name})
+            result.append(type(source_item).model_validate(merged))
         return result
 
     characters = enrich_source_items(
