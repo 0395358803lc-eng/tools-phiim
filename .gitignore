@@ -23,6 +23,7 @@ data/secrets/
 data/checkpoints/
 data/analysis-checkpoints/
 data/diagnostics/
+data/debug/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
