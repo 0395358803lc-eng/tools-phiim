@@ -220,29 +220,29 @@
     <form method="dialog" id="videoSetupForm">
       <div class="modal-head"><div><span class="eyebrow">BƯỚC 03 · TẠO VIDEO</span><h2>Thiết lập mô hình video</h2></div><button class="close-btn" value="cancel" type="submit">×</button></div>
       <p class="step-helper">Bước này chỉ mở sau khi nội dung đã được phân tích. Model được lưu theo project; thông tin đăng nhập được mã hóa và dùng lại ở các phiên sau.</p>
-      <label><span>Render provider</span><select id="providerInput"><option value="google-flow">Google Flow · gflow + Chrome</option><option value="mock">Mock / Demo</option></select></label>
+      <label><span>Render provider</span><select id="providerInput"><option value="google-flow">Google Flow · Flow CLI</option><option value="mock">Mock / Demo</option></select></label>
       <section class="ai-config flow-config" id="flowConfig">
         <div class="ai-config-head">
-          <div><span class="eyebrow">AI VIDEO GENERATION</span><strong>Google Flow · gflow primary</strong></div>
-          <span class="secure-note">Chrome profile · cookie fallback dùng DPAPI</span>
+          <div><span class="eyebrow">AI VIDEO GENERATION</span><strong>Google Flow · Flow CLI</strong></div>
+          <span class="secure-note">Phiên Flow CLI · cookie được mã hóa bằng DPAPI</span>
         </div>
         <label><span>Video model</span><select id="videoModelInput"><option value="veo-3.1-lite-lower-priority">Veo 3.1 Lite · Lower priority</option></select></label>
         <div class="credential-overview">
           <div class="connection-line" id="flowConnection"><i></i><span>Đang kiểm tra thông tin đã lưu...</span></div>
           <button class="secondary-btn" type="button" id="verifyFlowBtn">Kiểm tra</button>
-          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Cookie fallback</button>
+          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Kết nối Flow CLI</button>
         </div>
         <div class="credential-editor hidden" id="flowCredentialEditor">
-          <label><span>Legacy cookie fallback (JSON hoặc Cookie header)</span><textarea id="flowCookieInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Chỉ dùng khi gflow + Chrome profile chưa sẵn sàng"></textarea></label>
+          <label><span>Phiên Flow CLI (cookies.json hoặc Cookie header)</span><textarea id="flowCookieInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Dán cookie hoặc chọn cookies.json để xác thực Flow CLI"></textarea></label>
           <div class="flow-cookie-actions">
             <label class="file-picker"><input id="flowCookieFile" type="file" accept=".json,.txt">Chọn cookies.json</label>
-            <button class="secondary-btn" type="button" id="connectFlowBtn">Lưu cookie fallback</button>
+            <button class="secondary-btn" type="button" id="connectFlowBtn">Lưu phiên Flow CLI</button>
             <button class="ghost-btn" type="button" id="cancelFlowEditBtn">Hủy</button>
-            <button class="danger-ghost-btn" type="button" id="disconnectFlowBtn">Xóa cookie fallback</button>
+            <button class="danger-ghost-btn" type="button" id="disconnectFlowBtn">Xóa phiên Flow CLI</button>
           </div>
-          <p class="helper">Fallback này chỉ dùng khi gflow + Chrome profile không sẵn sàng; không phải luồng đăng nhập chính.</p>
+          <p class="helper">Thông tin xác thực chỉ dùng cho Flow CLI tích hợp và được lưu mã hóa trên máy.</p>
         </div>
-        <p class="helper">Luồng chính dùng gflow với Google Chrome thật: chạy <code>gflow auth login</code> một lần rồi <code>gflow doctor</code>. Cookie chỉ còn là fallback legacy; không nhập mật khẩu Google vào ứng dụng.</p>
+        <p class="helper">Render, reference image và recovery đều dùng Flow CLI tích hợp. Không nhập mật khẩu Google vào ứng dụng.</p>
       </section>
       <div class="modal-actions"><button class="secondary-btn" value="cancel" type="submit">Đóng</button><button class="primary-btn" id="saveVideoSetupBtn" value="default" type="submit">Lưu thiết lập</button></div>
     </form>
