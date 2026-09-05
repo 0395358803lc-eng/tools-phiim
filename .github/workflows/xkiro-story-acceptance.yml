@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: xkiro-story-acceptance-${{ github.ref }}
@@ -42,23 +42,77 @@ jobs:
           python -m pip install "pip==26.2.1"
           python -m pip install -c requirements.lock.txt -e .
 
-      - name: Verify xKiro secret
-        shell: pwsh
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:XKIRO_API_KEY)) {
-            throw "Repository secret XKIRO_API_KEY is not configured"
-          }
-
-      - name: Run live MiniMax 2.7 Free screenplay acceptance
+      - name: Run live MiniMax M2.7 Free screenplay acceptance
         id: acceptance
         continue-on-error: true
         shell: pwsh
         run: |
-          python scripts/xkiro-story-acceptance.py `
-            --script "acceptance/fixtures/chiec-ve-khong-co-chuyen-tau.md" `
-            --manifest "acceptance/fixtures/chiec-ve-source-truth.json" `
-            --output "acceptance-results/acceptance-report.json" `
-            --project-output "acceptance-results/project.json"
+          $ErrorActionPreference = "Stop"
+          $apiKey = $env:XKIRO_API_KEY
+          $bridgeBranch = ""
+          $rsa = $null
+
+          if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            $bridgeBranch = "xkiro-ephemeral-$env:GITHUB_RUN_ID"
+            $rsa = [System.Security.Cryptography.RSA]::Create(3072)
+            $publicPem = $rsa.ExportSubjectPublicKeyInfoPem()
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b $bridgeBranch
+            New-Item -ItemType Directory -Force -Path "acceptance/ephemeral" | Out-Null
+            Set-Content -LiteralPath "acceptance/ephemeral/public.pem" -Value $publicPem -NoNewline
+            git add acceptance/ephemeral/public.pem
+            git commit -m "chore: publish ephemeral xKiro bridge public key"
+            git push origin "HEAD:refs/heads/$bridgeBranch"
+            git checkout --detach $env:GITHUB_SHA
+
+            Write-Host "Waiting for encrypted xKiro credential on branch $bridgeBranch"
+            $deadline = (Get-Date).AddMinutes(10)
+            $cipherText = ""
+            while ((Get-Date) -lt $deadline) {
+              git fetch origin "refs/heads/${bridgeBranch}:refs/remotes/origin/${bridgeBranch}" --force 2>$null
+              $candidate = git show "refs/remotes/origin/${bridgeBranch}:acceptance/ephemeral/key.b64" 2>$null
+              if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($candidate -join ""))) {
+                $cipherText = ($candidate -join "").Trim()
+                break
+              }
+              Start-Sleep -Seconds 5
+            }
+            if ([string]::IsNullOrWhiteSpace($cipherText)) {
+              throw "Timed out waiting for encrypted xKiro credential bridge payload"
+            }
+
+            $cipherBytes = [Convert]::FromBase64String($cipherText)
+            $plainBytes = $rsa.Decrypt(
+              $cipherBytes,
+              [System.Security.Cryptography.RSAEncryptionPadding]::OaepSHA256
+            )
+            $apiKey = [Text.Encoding]::UTF8.GetString($plainBytes).Trim()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            throw "xKiro API key resolution produced an empty value"
+          }
+          Write-Output "::add-mask::$apiKey"
+          $env:XKIRO_API_KEY = $apiKey
+
+          $exitCode = 1
+          try {
+            python scripts/xkiro-story-acceptance.py `
+              --script "acceptance/fixtures/chiec-ve-khong-co-chuyen-tau.md" `
+              --manifest "acceptance/fixtures/chiec-ve-source-truth.json" `
+              --output "acceptance-results/acceptance-report.json" `
+              --project-output "acceptance-results/project.json"
+            $exitCode = $LASTEXITCODE
+          }
+          finally {
+            if ($rsa) { $rsa.Dispose() }
+            if (-not [string]::IsNullOrWhiteSpace($bridgeBranch)) {
+              git push origin --delete $bridgeBranch 2>$null
+            }
+          }
+          exit $exitCode
 
       - name: Upload acceptance evidence
         if: always()
