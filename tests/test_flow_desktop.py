@@ -26,6 +26,7 @@ class FakeFlow:
         return FlowConnection(
             configured=self.configured,
             authenticated=self.configured and verify,
+            transport="legacy-cookie" if self.configured else "none",
             cookie_count=8 if self.configured else 0,
             message="ready" if self.configured else "missing",
             flow_cli_available=True,
@@ -110,6 +111,19 @@ def test_flow_403_retries_headed_and_remembers_mode(tmp_path: Path) -> None:
     assert integration._force_headed_browser is True
 
 
+def test_gflow_profile_status_reports_primary_transport(tmp_path: Path) -> None:
+    integration = FlowCLIIntegration(tmp_path)
+    integration.gflow_executable = str(tmp_path / "gflow.cmd")
+    profile = integration._gflow_profile_dir()
+    profile.mkdir(parents=True)
+
+    status = asyncio.run(integration.status())
+
+    assert status.configured is True
+    assert status.transport == "gflow"
+    assert status.cookie_count == 0
+
+
 def test_flow_connection_and_reference_routes(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     flow = FakeFlow()
@@ -117,9 +131,11 @@ def test_flow_connection_and_reference_routes(tmp_path: Path) -> None:
     with TestClient(app) as client:
         initial = client.get("/api/video/flow/status").json()
         assert initial["configured"] is False
+        assert initial["transport"] == "none"
         connected = client.post("/api/video/flow/connect", json={"cookie": "SID=valid-cookie"})
         assert connected.status_code == 200
         assert connected.json()["authenticated"] is True
+        assert connected.json()["transport"] == "legacy-cookie"
 
         project = client.post(
             "/api/projects/analyze",
