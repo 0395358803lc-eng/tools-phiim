@@ -40,6 +40,8 @@ def _accepted_project():
     )
     scene.continuity_qc = ContinuityQCReport(status="NotApplicable", score=100)
     scene.result_file = "renders/scene.mp4"
+    scene.render_provider = project.settings.provider
+    scene.render_model = project.settings.video_model
     return project, scene
 
 
@@ -83,6 +85,21 @@ def test_acceptance_score_must_equal_strict_component_floor() -> None:
 
     scene.acceptance.score = 91
     assert _gate().scene_production_blockers(project, scene) == []
+
+
+def test_unified_gate_rejects_render_settings_mismatch() -> None:
+    project, scene = _accepted_project()
+    scene.render_provider = "google-flow"
+
+    blockers = _gate().scene_production_blockers(project, scene)
+
+    assert any("render provider" in item for item in blockers)
+    assert not _gate().is_scene_production_ready(project, scene)
+
+    scene.render_provider = project.settings.provider
+    scene.render_model = "different-model"
+    blockers = _gate().scene_production_blockers(project, scene)
+    assert any("render model" in item for item in blockers)
 
 
 def test_unified_gate_requires_direct_continuity_evidence() -> None:
