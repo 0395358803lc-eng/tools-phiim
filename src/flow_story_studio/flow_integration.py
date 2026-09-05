@@ -343,6 +343,7 @@ class FlowCLIIntegration:
             connection = FlowConnection(
                 configured=True,
                 authenticated=False,
+                transport="gflow",
                 cookie_count=0,
                 message="gflow Chrome profile is ready",
                 flow_cli_available=True,
@@ -366,6 +367,7 @@ class FlowCLIIntegration:
         connection = FlowConnection(
             configured=bool(cookies),
             authenticated=False,
+            transport="legacy-cookie" if cookies else "none",
             cookie_count=len(cookies),
             message="Chưa thêm cookie Google Flow",
             flow_cli_available=available,
