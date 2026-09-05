@@ -72,15 +72,17 @@ if (-not $chrome) { throw "Google Chrome is required for gflow" }
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if (-not $npm) { throw "npm was not found after Node.js setup" }
 
-$gflow = Get-Command gflow -ErrorAction SilentlyContinue
-if (-not $gflow) {
-    Write-Host "Installing gflow CLI 1.1.1..."
+$gflowVersionOk = $false
+& $npm.Source list -g "@swissmarley/gflow-cli@1.1.1" --depth=0 *> $null
+if ($LASTEXITCODE -eq 0) { $gflowVersionOk = $true }
+if (-not $gflowVersionOk) {
+    Write-Host "Installing pinned gflow CLI 1.1.1..."
     & $npm.Source install -g "@swissmarley/gflow-cli@1.1.1"
     if ($LASTEXITCODE -ne 0) { throw "gflow CLI install failed" }
     Refresh-ProcessPath
-    $gflow = Get-Command gflow -ErrorAction SilentlyContinue
 }
-if (-not $gflow) { throw "gflow was installed but is not available on PATH" }
+$gflow = Get-Command gflow -ErrorAction SilentlyContinue
+if (-not $gflow) { throw "gflow 1.1.1 is installed but is not available on PATH" }
 
 Write-Host "Setup completed."
 Write-Host "Primary Google Flow transport: gflow + Google Chrome."
