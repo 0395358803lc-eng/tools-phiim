@@ -81,7 +81,12 @@ def build_project_router(
 
     @router.patch("/api/projects/{project_id}/video-settings", response_model=Project)
     async def update_video_settings(project_id: str, patch: VideoProviderUpdate) -> Project:
-        project = required(project_id)
+        try:
+            project = service.get_idle_project(project_id, "đổi provider hoặc video model")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
         project.settings.provider = patch.provider
         project.settings.video_model = patch.video_model
         return storage.save(project)
@@ -172,6 +177,8 @@ def build_project_router(
             raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
 
     @router.post("/api/projects/{project_id}/continuity", response_model=Project)
     async def continuity(project_id: str, auto_fix: bool | None = Query(default=None)) -> Project:
@@ -179,5 +186,7 @@ def build_project_router(
             return service.check_continuity(project_id, auto_fix)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
 
     return router
