@@ -77,6 +77,17 @@ def scene_production_blockers(
     if require_result and not scene.result_file:
         reasons.append("rendered video file is missing")
 
+    if scene.render_provider != project.settings.provider:
+        reasons.append(
+            "render provider does not match current project settings: "
+            f"{scene.render_provider or '<missing>'}!={project.settings.provider}"
+        )
+    if scene.render_model != project.settings.video_model:
+        reasons.append(
+            "render model does not match current project settings: "
+            f"{scene.render_model or '<missing>'}!={project.settings.video_model}"
+        )
+
     if scene.quality is None:
         reasons.append("preflight quality report is missing")
     elif scene.quality.score < threshold:
