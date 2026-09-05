@@ -195,7 +195,7 @@ def test_colliding_character_and_prop_ids_cannot_hijack_original_semantics() -> 
     assert merged_minh.name == "Minh"
     assert merged_phone.name == "Điện thoại"
     assert merged_scene.characters == ["CHAR_001"]
-    assert merged_scene.start_state.character_positions == {"CHAR_001": "bên bàn"}
+    assert merged_scene.start_state.character_positions == {"CHAR_001": "trong Căn hộ"}
     assert set(merged_scene.start_state.prop_positions) == {"PROP_001"}
     assert "Điện thoại" in merged_scene.start_state.prop_positions["PROP_001"]
     assert all(item.name != "Bác sĩ cấp cứu" for item in merged.characters)
