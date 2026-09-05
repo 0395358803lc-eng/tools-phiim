@@ -228,6 +228,55 @@ def _normalize_source_timeline(project: Project) -> Project:
     return project
 
 
+def _source_ground_nested_state(
+    scene,
+    *,
+    source_scene,
+    previous_scene,
+    characters: list[Character],
+) -> None:
+    """Replace AI-contaminated nested state with deterministic screenplay-grounded state."""
+    if source_scene is None:
+        return
+
+    visible_ids = set(scene.characters)
+    wardrobe_by_id = {item.id: item.clothing for item in characters}
+    direct = previous_scene is not None and is_direct_continuation(previous_scene, scene)
+
+    start_anchor = previous_scene.end_state if direct else source_scene.start_state
+    end_anchor = source_scene.end_state
+
+    def grounded_positions(anchor_state, phase: str) -> dict[str, str]:
+        grounded: dict[str, str] = {}
+        for character_id in visible_ids:
+            value = str(anchor_state.character_positions.get(character_id, "")).strip()
+            if not value:
+                value = (
+                    f"Visible in source-grounded {phase} frame at {scene.location_id}; "
+                    "blocking follows the authored action"
+                )
+            grounded[character_id] = value
+        return grounded
+
+    scene.start_state.character_positions = grounded_positions(start_anchor, "start")
+    scene.end_state.character_positions = grounded_positions(end_anchor, "end")
+    scene.start_state.character_wardrobe = {
+        character_id: wardrobe_by_id[character_id]
+        for character_id in visible_ids
+        if character_id in wardrobe_by_id
+    }
+    scene.end_state.character_wardrobe = dict(scene.start_state.character_wardrobe)
+
+    # Prop state and time are normalized elsewhere; reset the remaining nested
+    # continuity fields so AI text from another scene cannot leak across a cut.
+    scene.start_state.weather = start_anchor.weather
+    scene.start_state.camera = start_anchor.camera
+    scene.start_state.notes = start_anchor.notes
+    scene.end_state.weather = end_anchor.weather
+    scene.end_state.camera = end_anchor.camera
+    scene.end_state.notes = end_anchor.notes
+
+
 def _assert_structural_integrity(project: Project) -> None:
     character_ids = {item.id for item in project.characters}
     location_ids = {item.id for item in project.locations}
@@ -316,6 +365,9 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     project = finalize_audio(project, source_project)
 
     # Auto continuity can rewrite nested state; normalize all semantic state first.
+    source_scene_by_id = {
+        scene.id: scene for scene in source_project.scenes
+    } if source_project is not None else {}
     previous_scene = None
     for scene in project.scenes:
         normalize_semantic_scene(
@@ -338,6 +390,12 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             prop_map=prop_map,
             visible_character_ids=visible,
             valid_prop_ids=valid_prop_ids,
+        )
+        _source_ground_nested_state(
+            scene,
+            source_scene=source_scene_by_id.get(scene.id),
+            previous_scene=previous_scene,
+            characters=project.characters,
         )
         previous_scene = scene
 
