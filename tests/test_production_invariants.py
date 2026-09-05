@@ -153,3 +153,54 @@ def test_deterministic_analyzer_does_not_seed_every_prop_into_every_scene() -> N
     assert notebook_scenes
     assert all("red notebook" in scene.source_text.casefold() for scene in notebook_scenes)
     assert hallway.start_state.prop_positions == {}
+
+
+def test_finalization_rejects_ai_clock_drift_and_stale_voiceover_penalty() -> None:
+    script = """
+TARGET RUNTIME: 24 seconds
+
+CHARACTERS
+- ALEX, adult man, dark jacket.
+
+SCENE 1 — STATION — NIGHT — PRESENT
+Alex stands by the platform.
+
+SCENE 2 — STREET — AFTERNOON — FLASHBACK
+Alex remembers walking in the street.
+
+SCENE 3 — STATION — NIGHT — PRESENT
+Alex returns to the station and looks toward the exit.
+"""
+    draft = analyze_story(
+        AnalyzeRequest(
+            name="timeline source truth",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    alex = draft.characters[0]
+    scenes = []
+    for scene in draft.scenes:
+        payload = _scene_payload(scene, characters=[alex.id])
+        payload["voiceover"] = "AI invented narration that is not in the screenplay."
+        payload["start_state"]["time"] = "18:30"
+        payload["end_state"]["time"] = "18:45"
+        scenes.append(payload)
+
+    project = merge_analysis(
+        draft,
+        {
+            "characters": [item.model_dump() for item in draft.characters],
+            "locations": [item.model_dump() for item in draft.locations],
+            "props": [item.model_dump() for item in draft.props],
+            "scenes": scenes,
+        },
+        "test-model",
+    )
+
+    assert project.scenes[0].start_state.time.startswith("Present")
+    assert project.scenes[1].start_state.time.startswith("Flashback")
+    assert project.scenes[2].start_state.time.startswith("Present")
+    assert all(scene.voiceover == "" for scene in project.scenes)
+    assert all("Voiceover" not in item for item in project.continuity_warnings)
+    assert project.continuity_score == 100
