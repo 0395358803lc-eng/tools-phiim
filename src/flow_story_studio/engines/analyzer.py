@@ -776,7 +776,7 @@ def analyze_story(request: AnalyzeRequest) -> Project:
         }
         end_state.time = f"Sau {duration} giây kể từ đầu {index:03d}"
         end_state.camera = CAMERA_SEQUENCE[index % len(CAMERA_SEQUENCE)]
-        end_state.notes = "Giữ làm tham chiếu trực tiếp cho cảnh kế tiếp."
+        end_state.notes = ""
         scene = Scene(
             id=f"SCENE_{index:03d}",
             order=index,
@@ -847,6 +847,17 @@ def analyze_story(request: AnalyzeRequest) -> Project:
     location_by_id = {item.id: item for item in project.locations}
     for index, scene in enumerate(project.scenes):
         visible_characters = [item for item in project.characters if item.id in scene.characters]
+        scene.visual_prompt = make_visual_prompt(
+            action=scene.action,
+            characters=visible_characters,
+            location=location_by_id[scene.location_id],
+            camera=scene.camera,
+            lighting=scene.lighting,
+            atmosphere=scene.atmosphere,
+            style=project.visual_style,
+            start_state=scene.start_state,
+            end_state=scene.end_state,
+        )
         scene.flow_prompt = make_flow_prompt(
             scene,
             characters=visible_characters,

@@ -37,7 +37,7 @@ def test_storage_and_scene_edit(tmp_path: Path) -> None:
         assert any("có thể ảnh hưởng" in item for item in updated.scenes[1].warnings)
 
 
-def test_reorder_preserves_scene_identity_and_media_artifacts(tmp_path: Path) -> None:
+def test_reorder_preserves_identity_but_invalidates_stale_media(tmp_path: Path) -> None:
     service = StudioService(ProjectStorage(tmp_path))
     project = service.analyze(AnalyzeRequest(name="Order", original_text=TEXT))
     ids = [scene.id for scene in project.scenes]
@@ -53,8 +53,34 @@ def test_reorder_preserves_scene_identity_and_media_artifacts(tmp_path: Path) ->
     assert [scene.id for scene in reordered.scenes] == requested
     assert [scene.order for scene in reordered.scenes] == list(range(1, len(ids) + 1))
     moved = next(scene for scene in reordered.scenes if scene.id == media_scene.id)
-    assert moved.result_file.endswith(f"/{media_scene.id}/result.mp4")
-    assert moved.result_url.endswith(f"/scenes/{media_scene.id}/video")
+    assert moved.result_file == ""
+    assert moved.result_url == ""
+    assert moved.status == "Waiting"
+    assert moved.acceptance.status == "Pending"
+    assert moved.visual_qc.status == "Pending"
+
+
+def test_semantic_mutations_are_blocked_while_render_is_in_flight(tmp_path: Path) -> None:
+    service = StudioService(ProjectStorage(tmp_path))
+    project = service.analyze(AnalyzeRequest(name="Render lock", original_text=TEXT))
+    scene = project.scenes[0]
+    scene.status = "Generating"
+    service.storage.save(project)
+
+    service.set_scene_lock(project.id, scene.id, False)
+    with pytest.raises(PermissionError, match="render đang chạy"):
+        service.update_scene(
+            project.id,
+            scene.id,
+            SceneUpdate(action="Không được đổi trong lúc render."),
+        )
+    with pytest.raises(PermissionError, match="render đang chạy"):
+        service.reorder(
+            project.id,
+            ReorderRequest(scene_ids=[item.id for item in project.scenes]),
+        )
+    with pytest.raises(PermissionError, match="render đang chạy"):
+        service.check_continuity(project.id)
 
 
 def test_reorder_rejects_duplicate_scene_ids(tmp_path: Path) -> None:

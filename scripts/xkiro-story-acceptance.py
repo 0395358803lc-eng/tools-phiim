@@ -456,6 +456,55 @@ def audit_project(
                     number,
                 )
 
+            start_notes = scene.start_state.notes
+            if dependency_mode == "direct":
+                if "Direct continuation from" not in start_notes:
+                    error(
+                        "STATE_DEPENDENCY_NOTE",
+                        f"{scene.id} direct start state lacks direct-continuation note",
+                        number,
+                    )
+            elif dependency_mode == "canonical":
+                if "Canonical cut/new beat" not in start_notes:
+                    error(
+                        "STATE_DEPENDENCY_NOTE",
+                        f"{scene.id} canonical start state lacks canonical-reset note",
+                        number,
+                    )
+
+            if scene.order < len(project.scenes):
+                next_scene = project.scenes[scene.order]
+                next_mode = next_scene.visual_plan.dependency_mode
+                end_notes = scene.end_state.notes
+                if next_mode == "direct":
+                    if (
+                        next_scene.id not in end_notes
+                        or "direct continuation" not in end_notes.casefold()
+                        or "may anchor" not in end_notes.casefold()
+                    ):
+                        error(
+                            "STATE_DEPENDENCY_NOTE",
+                            f"{scene.id} end state does not authorize only the next direct scene",
+                            number,
+                        )
+                else:
+                    if (
+                        next_scene.id not in end_notes
+                        or "canonical cut/new beat" not in end_notes.casefold()
+                        or "may anchor" in end_notes.casefold()
+                    ):
+                        error(
+                            "STATE_DEPENDENCY_NOTE",
+                            f"{scene.id} end state contradicts next canonical boundary",
+                            number,
+                        )
+            elif scene.end_state.notes != "Final scene; no downstream frame anchor.":
+                error(
+                    "STATE_DEPENDENCY_NOTE",
+                    f"{scene.id} final state lacks terminal boundary note",
+                    number,
+                )
+
         missing_required = required - aggregate_visible
         if missing_required:
             error(

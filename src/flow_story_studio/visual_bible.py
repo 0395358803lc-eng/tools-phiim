@@ -151,4 +151,41 @@ def build_visual_bible(project: Project) -> Project:
             lock_prompt="\n".join(relevant),
         )
         previous = scene
+
+    for index, scene in enumerate(project.scenes):
+        mode = scene.visual_plan.dependency_mode
+        if mode == "opening":
+            scene.start_state.notes = (
+                "Opening scene; establish from canonical source truth and visual references."
+            )
+        elif mode == "direct":
+            previous_scene = project.scenes[index - 1]
+            scene.start_state.notes = (
+                f"Direct continuation from {previous_scene.id}; use its accepted final frame "
+                "as the physical-state anchor."
+            )
+        else:
+            scene.start_state.notes = (
+                "Canonical cut/new beat; re-anchor to this scene's source truth and canonical "
+                "references. Do not inherit the previous final-frame composition."
+            )
+
+        if index + 1 >= len(project.scenes):
+            scene.end_state.notes = "Final scene; no downstream frame anchor."
+            continue
+
+        next_scene = project.scenes[index + 1]
+        if (
+            next_scene.visual_plan.dependency_mode == "direct"
+            and is_direct_continuation(scene, next_scene)
+        ):
+            scene.end_state.notes = (
+                f"Accepted final frame may anchor {next_scene.id} because it is a direct "
+                "continuation."
+            )
+        else:
+            scene.end_state.notes = (
+                f"{next_scene.id} begins as a canonical cut/new beat; do not carry this "
+                "final frame forward."
+            )
     return project

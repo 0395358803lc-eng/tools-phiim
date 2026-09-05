@@ -70,6 +70,28 @@ def test_visual_plan_uses_direct_only_for_actual_direct_continuation() -> None:
         assert scene.visual_plan.anchor_scene_id == scene.id
 
 
+def test_dependency_notes_match_visual_plan_and_next_scene_boundary() -> None:
+    project = build_visual_bible(_project())
+
+    assert "Opening scene" in project.scenes[0].start_state.notes
+
+    for index, scene in enumerate(project.scenes[1:], start=1):
+        previous = project.scenes[index - 1]
+        if scene.visual_plan.dependency_mode == "direct":
+            assert "Direct continuation from" in scene.start_state.notes
+            assert scene.id in previous.end_state.notes
+            assert "direct continuation" in previous.end_state.notes.casefold()
+            assert "may anchor" in previous.end_state.notes.casefold()
+        else:
+            assert scene.visual_plan.dependency_mode == "canonical"
+            assert "Canonical cut/new beat" in scene.start_state.notes
+            assert scene.id in previous.end_state.notes
+            assert "canonical cut/new beat" in previous.end_state.notes.casefold()
+            assert "may anchor" not in previous.end_state.notes.casefold()
+
+    assert project.scenes[-1].end_state.notes == "Final scene; no downstream frame anchor."
+
+
 def test_schema_v2_migrates_visual_bible_defaults() -> None:
     project = _project()
     payload = deepcopy(project.model_dump())
