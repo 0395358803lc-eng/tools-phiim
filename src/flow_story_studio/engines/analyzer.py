@@ -24,6 +24,7 @@ from ..models import (
     Scene,
     StoryBible,
 )
+from ..scene_contracts import seal_project_contracts
 from ..visual_bible import build_visual_bible
 from .continuity import check_project
 from .prompt_generator import global_visual_style, make_flow_prompt, make_visual_prompt
@@ -854,4 +855,4 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             all_characters=project.characters,
             previous_scene_id=project.scenes[index - 1].id if index else None,
         )
-    return project
+    return seal_project_contracts(project)
