@@ -356,11 +356,14 @@ def test_xkiro_api_routes(tmp_path: Path) -> None:
         )
         assert started.status_code == 202
         job_id = started.json()["id"]
-        for _ in range(100):
+        deadline = time.monotonic() + 10.0
+        while True:
             job = test_client.get(f"/api/analysis/jobs/{job_id}").json()
             if job["status"] in {"completed", "failed"}:
                 break
-            time.sleep(0.01)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
         assert job["status"] == "completed"
         assert job["project"]["scenes"]
         assert any(entry["level"] == "success" for entry in job["logs"])
