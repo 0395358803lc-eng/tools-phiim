@@ -354,6 +354,7 @@ class FlowVideoModel(StrictModel):
 class FlowConnection(StrictModel):
     configured: bool
     authenticated: bool = False
+    transport: Literal["none", "gflow", "legacy-cookie"] = "none"
     cookie_count: int = 0
     message: str = ""
     flow_cli_available: bool = False
