@@ -533,6 +533,7 @@ def audit_project(
                 "production_shots": [scene.id for scene in scenes],
                 "visible_cast_by_shot": shot_visible,
                 "audio": actual_audio,
+                "audio_delivery": actual_delivery,
                 "prop_references": [
                     prop_name_by_id.get(item, item) for item in sorted(referenced_prop_ids)
                 ],
