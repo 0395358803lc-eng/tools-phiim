@@ -15,6 +15,7 @@ import unicodedata
 
 from flow_story_studio.analysis_providers.xkiro import XKiroClient
 from flow_story_studio.models import AnalyzeRequest, Project, VideoSettings
+from flow_story_studio.scene_contracts import verify_scene_contract
 
 
 TERM_ALTERNATIVES: dict[str, tuple[str, ...]] = {
@@ -367,6 +368,12 @@ def audit_project(
                 )
             if not scene.ai_locked:
                 error("AI_LOCK", f"Scene {scene.id} is not AI continuity locked", number)
+            if not verify_scene_contract(scene):
+                error(
+                    "SCENE_CONTRACT",
+                    f"{scene.id} Scene Packet contract hash is missing or stale",
+                    number,
+                )
             for item in scene.warnings:
                 if "response incomplete; retained deterministic source-truth scene data" in item:
                     provider_fallback_scenes.add(scene.id)
@@ -538,6 +545,7 @@ def audit_project(
                     prop_name_by_id.get(item, item) for item in sorted(referenced_prop_ids)
                 ],
                 "dependency_modes": [scene.visual_plan.dependency_mode for scene in scenes],
+                "contract_hashes": [scene.contract_hash for scene in scenes],
             }
         )
 
