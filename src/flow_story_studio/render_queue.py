@@ -20,6 +20,7 @@ from .models import (
     VisualIssue,
     VisualQCReport,
 )
+from .production_gate import is_scene_production_ready
 from .providers.mock import MockProvider
 from .reference_manager import ReferenceManager, promote_accepted_scene_references
 from .scene_contracts import verify_scene_contract
@@ -58,18 +59,12 @@ class RenderQueue:
         return self._resume_events[project_id]
 
     @staticmethod
-    def _is_finally_accepted(scene: Scene) -> bool:
-        return (
-            scene.status == "Accepted"
-            and scene.acceptance.status == "Accepted"
-            and scene.ai_locked
-            and verify_scene_contract(scene)
-            and bool(scene.result_file)
-        )
+    def _is_finally_accepted(project: Project, scene: Scene) -> bool:
+        return is_scene_production_ready(project, scene)
 
     @classmethod
     def _refresh_final_video(cls, project: Project) -> None:
-        if project.scenes and all(cls._is_finally_accepted(item) for item in project.scenes):
+        if project.scenes and all(cls._is_finally_accepted(project, item) for item in project.scenes):
             project.final_video = FinalVideo(status="Ready", scene_count=len(project.scenes))
         elif project.final_video.status != "Merging":
             project.final_video = FinalVideo(status="NotReady")
@@ -146,7 +141,7 @@ class RenderQueue:
         )
         if not previous or not is_direct_continuation(previous, scene):
             return None
-        return None if self._is_finally_accepted(previous) else previous
+        return None if self._is_finally_accepted(project, previous) else previous
 
     async def _prepare_reference(self, project: Project, scene: Scene) -> bool:
         if project.settings.provider != "google-flow":
