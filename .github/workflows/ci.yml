@@ -1,0 +1,60 @@
+name: CI
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project and test tooling
+        shell: pwsh
+        run: |
+          python -m pip install "pip==26.2.1"
+          $wheel = Get-ChildItem vendor -Filter 'flow_cli-*.whl' | Select-Object -First 1
+          if (-not $wheel) { throw 'Vendored Flow CLI wheel not found' }
+          $expected = '62d4441b388bbee6b1955bfd2c44655cc40377a031aa045ec8c3e28682100931'
+          $actual = (Get-FileHash -LiteralPath $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Vendored Flow CLI SHA-256 mismatch' }
+          python -m pip install -c requirements.lock.txt $wheel.FullName
+          python -m pip install -c requirements.lock.txt -e ".[dev]"
+      - name: Dependency integrity
+        run: python -m pip check
+      - name: Ruff
+        run: python -m ruff check .
+      - name: JavaScript syntax
+        run: node --check static/app.js
+      - name: Tests and coverage
+        run: python -m pytest --cov=flow_story_studio --cov-report=term-missing --cov-report=xml
+      - name: Browser E2E
+        shell: pwsh
+        run: |
+          python -m playwright install chromium
+          python scripts/browser-e2e.py
+      - name: Static security scan
+        run: python -m bandit -q -r src/flow_story_studio
+      - name: Dependency vulnerability audit
+        run: python -m pip_audit --skip-editable
+      - name: SBOM
+        run: python -m pip_audit --skip-editable -f cyclonedx-json -o sbom.cdx.json
+      - name: Third-party license report
+        run: python -m piplicenses --format=markdown --with-urls --output-file THIRD_PARTY_LICENSES.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-artifacts
+          path: |
+            coverage.xml
+            sbom.cdx.json
+            THIRD_PARTY_LICENSES.md
+          if-no-files-found: ignore

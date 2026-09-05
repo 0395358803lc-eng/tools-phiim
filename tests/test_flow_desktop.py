@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from flow_story_studio.flow_integration import CookieVault, FlowCLIIntegration
@@ -259,23 +260,41 @@ def test_flow_browser_download_fallback_and_candidate_identity(
     assert integration._select_video_candidate(candidates, {"unknown"}) is None
 
 
-def test_generate_all_keeps_completed_scenes(tmp_path: Path) -> None:
+def test_generate_all_keeps_accepted_scenes(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     project = StudioService(storage).analyze(
         AnalyzeRequest(name="Resume queue", original_text=TEXT)
     )
-    project.scenes[0].status = "Completed"
+    project.scenes[0].status = "Accepted"
     project.scenes[0].progress = 100
+    project.scenes[0].acceptance.status = "Accepted"
+    project.scenes[0].acceptance.score = 100
     storage.save(project)
     queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
 
     async def run() -> None:
         queued = await queue.enqueue(project.id, [])
-        assert queued.scenes[0].status == "Completed"
+        assert queued.scenes[0].status == "Accepted"
         assert queued.scenes[0].progress == 100
         await queue.shutdown()
 
     asyncio.run(run())
+
+
+def test_pause_stops_pending_scenes_without_interrupting_active_render(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = StudioService(storage).analyze(AnalyzeRequest(name="Pause queue", original_text=TEXT))
+    if len(project.scenes) < 2:
+        pytest.skip("Need at least two scenes for pause semantics")
+    project.scenes[0].status = "Generating"
+    project.scenes[1].status = "Waiting"
+    storage.save(project)
+    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    queue.pause(project.id)
+    paused = storage.get(project.id)
+    assert paused is not None
+    assert paused.scenes[0].status == "Generating"
+    assert paused.scenes[1].status == "Paused"
 
 
 def test_reference_path_is_sandboxed_to_reference_directory(tmp_path: Path) -> None:
@@ -307,3 +326,83 @@ def test_reference_upload_rejects_mismatched_image_bytes(tmp_path: Path) -> None
             headers={"Content-Type": "image/png"},
         )
         assert response.status_code == 415
+
+
+def test_render_queue_does_not_chain_reference_across_scene_cut(tmp_path: Path) -> None:
+    from flow_story_studio.engines.segmenter import SCENE_CONTEXT_PREFIX
+
+    storage = ProjectStorage(tmp_path / "projects")
+    project = StudioService(storage).analyze(
+        AnalyzeRequest(name="Reference cut", original_text=TEXT)
+    )
+    if len(project.scenes) < 2:
+        pytest.skip("Need at least two scenes")
+    project.settings.provider = "google-flow"
+    project.scenes[1].source_text = f"{SCENE_CONTEXT_PREFIX}CUT [END CONTEXT]\nnew beat"
+    storage.save(project)
+    seen_references: list[str] = []
+
+    class CaptureFlow:
+        configured = True
+
+        async def generate(self, current: object, scene: object, checkpoint=None) -> RenderResult:
+            seen_references.append(scene.reference_image)
+            return RenderResult(
+                job_id=f"job-{scene.id}",
+                result_url="/video",
+                result_file=f"renders/{project.id}/{scene.id}/result.mp4",
+                last_frame_file=f"references/{project.id}/{scene.id}-last.jpg",
+            )
+
+    queue = RenderQueue(storage, CaptureFlow())  # type: ignore[arg-type]
+
+    async def run() -> None:
+        await queue.enqueue(project.id, [project.scenes[0].id, project.scenes[1].id])
+        await queue._queues[project.id].join()
+        await queue.shutdown()
+
+    asyncio.run(run())
+    assert seen_references[:2] == ["", ""]
+
+
+def test_explicit_rerender_does_not_recover_stale_upstream_job(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = StudioService(storage).analyze(
+        AnalyzeRequest(name="Fresh rerender", original_text=TEXT)
+    )
+    project.settings.provider = "google-flow"
+    scene = project.scenes[0]
+    scene.provider_job_id = "old-job"
+    scene.upstream_project_id = "old-project"
+    scene.upstream_workflow_id = "old-workflow"
+    scene.upstream_media_id = "old-media"
+    scene.upstream_resource_name = "old-resource"
+    storage.save(project)
+    captured: list[tuple[str, str, str, str, str]] = []
+
+    class CaptureFlow:
+        configured = True
+
+        async def generate(
+            self, current: object, current_scene: object, checkpoint=None
+        ) -> RenderResult:
+            captured.append(
+                (
+                    current_scene.provider_job_id,
+                    current_scene.upstream_project_id,
+                    current_scene.upstream_workflow_id,
+                    current_scene.upstream_media_id,
+                    current_scene.upstream_resource_name,
+                )
+            )
+            return RenderResult(job_id="new-job", result_url="/video")
+
+    queue = RenderQueue(storage, CaptureFlow())  # type: ignore[arg-type]
+
+    async def run() -> None:
+        await queue.enqueue(project.id, [scene.id])
+        await queue._queues[project.id].join()
+        await queue.shutdown()
+
+    asyncio.run(run())
+    assert captured == [("", "", "", "", "")]

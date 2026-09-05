@@ -152,3 +152,10 @@ def test_analysis_job_returns_compact_project_summary(tmp_path: Path) -> None:
         assert job["status"] == "completed"
         assert set(job["project"]) == {"id", "name", "scene_count", "continuity_score", "scenes"}
         assert all(set(scene) == {"id", "status", "progress"} for scene in job["project"]["scenes"])
+        full = client.get(f"/api/projects/{job['project']['id']}")
+        assert full.status_code == 200
+        payload = full.json()
+        assert payload["original_text"] == TEXT
+        assert payload["settings"]
+        assert payload["story_bible"]
+        assert len(payload["scenes"]) == job["project"]["scene_count"]

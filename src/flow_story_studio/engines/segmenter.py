@@ -11,8 +11,8 @@ BOUNDARY_HINTS = re.compile(
 )
 
 NON_NARRATIVE_SECTION = re.compile(
-    r"\b(nhân vật|character(?: bible)?|thông tin chung|tổng quan|thể loại|"
-    r"định dạng|phong cách|ghi chú sản xuất)\b",
+    r"\b(nhân vật|characters?|character(?: bible)?|cast|props?|objects?|"
+    r"thông tin chung|tổng quan|thể loại|định dạng|phong cách|ghi chú sản xuất)\b",
     re.IGNORECASE,
 )
 NARRATIVE_SECTION = re.compile(
@@ -21,10 +21,155 @@ NARRATIVE_SECTION = re.compile(
     re.IGNORECASE,
 )
 METADATA_LINE = re.compile(
-    r"^(thể loại|thời lượng(?: dự kiến)?|bối cảnh chung|không khí|tỷ lệ|"
-    r"độ phân giải|phong cách hình ảnh|mục tiêu)\s*:",
+    r"^(?:target\s*runtime|runtime|duration|genre|format|aspect\s*ratio|resolution|style|"
+    r"purpose|audience|thể\s*loại|thời\s*lượng(?:\s*dự\s*kiến|\s*mục\s*tiêu)?|"
+    r"bối\s*cảnh\s*chung|không\s*khí|tỷ\s*lệ|độ\s*phân\s*giải|"
+    r"phong\s*cách\s*hình\s*ảnh|mục\s*tiêu)\s*:",
     re.IGNORECASE,
 )
+SCENE_CONTEXT_PREFIX = "[SCENE CONTEXT] "
+SCENE_CONTEXT_SUFFIX = " [END CONTEXT]"
+SCENE_CONTEXT_HEADING = re.compile(
+    r"\b(cảnh\s+\d+|scene\s+\d+|flashback|trở lại hiện tại|một năm trước|cảnh cuối)\b",
+    re.IGNORECASE,
+)
+
+
+def _append_scene_context(output: list[str], plain: str) -> None:
+    while output and output[-1] == "":
+        output.pop()
+    marker = f"{SCENE_CONTEXT_PREFIX}{plain}{SCENE_CONTEXT_SUFFIX}"
+    if output and output[-1].startswith(SCENE_CONTEXT_PREFIX):
+        current = output[-1].removesuffix(SCENE_CONTEXT_SUFFIX)
+        output[-1] = f"{current} | {plain}{SCENE_CONTEXT_SUFFIX}"
+        return
+    if output and output[-1] != "":
+        output.append("")
+    output.append(marker)
+
+
+RUNTIME_RE = re.compile(
+    r"(?:thời\s*lượng(?:\s*(?:mục\s*tiêu|dự\s*kiến))?|target\s*runtime|runtime|duration)"
+    r"[^\n:]{0,30}:?\s*(?:khoảng|about|approx(?:imately)?|~)?\s*(?:(?P<hours>\d+(?:[.,]\d+)?)\s*(?:giờ|hours?|hrs?|h)\s*)?"
+    r"(?:(?P<minutes>\d+(?:[.,]\d+)?)\s*(?:phút|minutes?|mins?|min|m)\s*)?"
+    r"(?:(?P<seconds>\d+(?:[.,]\d+)?)\s*(?:giây|seconds?|secs?|sec|s))?",
+    re.IGNORECASE,
+)
+
+
+def target_runtime_seconds(text: str) -> int | None:
+    """Read an explicit production runtime without mistaking story timeline numbers for it."""
+    for line in re.sub(r"\r\n?", "\n", text).splitlines():
+        clean_line = re.sub(r"[*_`#>]+", " ", line)
+        clean_line = re.sub(r"^\s*[-+]\s+", "", clean_line)
+        match = RUNTIME_RE.search(clean_line)
+        if not match:
+            continue
+        values = {key: value for key, value in match.groupdict().items() if value}
+        if not values:
+            continue
+        hours = float(values.get("hours", "0").replace(",", "."))
+        minutes = float(values.get("minutes", "0").replace(",", "."))
+        seconds = float(values.get("seconds", "0").replace(",", "."))
+        total = round(hours * 3600 + minutes * 60 + seconds)
+        if 10 <= total <= 24 * 3600:
+            return total
+    return None
+
+
+def _scene_blocks(scenes: list[str]) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for scene in scenes:
+        if scene.lstrip().startswith(SCENE_CONTEXT_PREFIX) and current:
+            blocks.append(current)
+            current = []
+        current.append(scene)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _merge_block(block: list[str], target_count: int) -> list[str]:
+    if len(block) <= target_count:
+        return block
+    weights = [max(1, len(item.split())) for item in block]
+    total = sum(weights)
+    result: list[str] = []
+    start = 0
+    remaining_weight = total
+    for slot in range(target_count):
+        remaining_slots = target_count - slot
+        if remaining_slots == 1:
+            result.append(" ".join(block[start:]))
+            break
+        target_weight = remaining_weight / remaining_slots
+        acc = 0
+        end = start
+        max_end = len(block) - (remaining_slots - 1)
+        while end < max_end:
+            next_weight = weights[end]
+            if end > start and acc + next_weight > target_weight:
+                break
+            acc += next_weight
+            end += 1
+        if end == start:
+            end += 1
+            acc += weights[start]
+        result.append(" ".join(block[start:end]))
+        remaining_weight -= acc
+        start = end
+    return result
+
+
+def consolidate_to_runtime(
+    scenes: list[str], runtime_seconds: int | None, scene_duration: int
+) -> list[str]:
+    """Reduce over-segmentation while preserving explicit screenplay scene boundaries."""
+    if not scenes or runtime_seconds is None:
+        return scenes
+    target_count = max(1, round(runtime_seconds / max(4, scene_duration)))
+    blocks = _scene_blocks(scenes)
+    target_count = max(len(blocks), min(len(scenes), target_count))
+    if len(scenes) <= target_count:
+        return scenes
+    weights = [sum(max(1, len(scene.split())) for scene in block) for block in blocks]
+    allocation = [1 for _ in blocks]
+    remaining = target_count - len(blocks)
+    while remaining > 0:
+        candidates = [i for i, block in enumerate(blocks) if allocation[i] < len(block)]
+        if not candidates:
+            break
+        index = max(candidates, key=lambda i: weights[i] / allocation[i])
+        allocation[index] += 1
+        remaining -= 1
+    output: list[str] = []
+    for block, count in zip(blocks, allocation, strict=True):
+        output.extend(_merge_block(block, count))
+    return output
+
+
+def allocate_scene_durations(
+    scenes: list[str], runtime_seconds: int | None, default_duration: int
+) -> list[int]:
+    if not scenes:
+        return []
+    if runtime_seconds is None:
+        return [min(30, max(default_duration, speaking_duration(scene))) for scene in scenes]
+    minimum_total = 4 * len(scenes)
+    maximum_total = 30 * len(scenes)
+    target = max(minimum_total, min(maximum_total, runtime_seconds))
+    weights = [max(1, len(scene.split())) for scene in scenes]
+    durations = [4 for _ in scenes]
+    remaining = target - minimum_total
+    while remaining > 0:
+        candidates = [i for i, value in enumerate(durations) if value < 30]
+        if not candidates:
+            break
+        index = max(candidates, key=lambda i: weights[i] / durations[i])
+        durations[index] += 1
+        remaining -= 1
+    return durations
 
 
 def narrative_text(text: str) -> str:
@@ -51,10 +196,31 @@ def narrative_text(text: str) -> str:
                 continue
             if NARRATIVE_SECTION.search(plain):
                 active = True
-                if output and output[-1] != "":
-                    output.append("")
+                if SCENE_CONTEXT_HEADING.search(plain):
+                    _append_scene_context(output, plain)
                 continue
-            # Headings are navigation, not visual action.
+            if active and SCENE_CONTEXT_HEADING.search(plain):
+                _append_scene_context(output, plain)
+                continue
+            # Non-context headings are navigation, not visual action.
+            continue
+        plain_section_heading = bool(
+            re.fullmatch(
+                r"(?:characters?|character bible|cast|props?|objects?|metadata|story bible)",
+                plain,
+                re.IGNORECASE,
+            )
+        )
+        if plain_section_heading:
+            active = False
+            continue
+        plain_scene_heading = bool(
+            re.match(r"^(?:cảnh|scene)\s*\d+\b", plain, re.IGNORECASE)
+            or re.match(r"^(?:INT\.?|EXT\.?|INT\./EXT\.?)\s+", plain, re.IGNORECASE)
+        )
+        if plain_scene_heading:
+            active = True
+            _append_scene_context(output, plain)
             continue
         if not active or METADATA_LINE.match(plain):
             continue
@@ -95,7 +261,9 @@ def segment_story(text: str, duration: int) -> list[str]:
 
     for sentence in sentences:
         words = sentence.split()
-        starts_new_beat = bool(BOUNDARY_HINTS.search(sentence)) and current
+        starts_new_beat = (
+            sentence.startswith(SCENE_CONTEXT_PREFIX) or bool(BOUNDARY_HINTS.search(sentence))
+        ) and current
         would_overflow = count + len(words) > hard_limit and current
         if starts_new_beat or would_overflow:
             scenes.append(" ".join(current))
@@ -137,7 +305,7 @@ def segment_story(text: str, duration: int) -> list[str]:
             count += len(words)
     if current:
         scenes.append(" ".join(current))
-    return scenes
+    return consolidate_to_runtime(scenes, target_runtime_seconds(text), duration)
 
 
 def speaking_duration(text: str, minimum: int = 4, maximum: int = 30) -> int:

@@ -10,10 +10,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from .flow_integration import FlowCLIIntegration
+from .logging_config import get_logger
 from .models import FinalVideo, GenerateRequest, Project, utc_now
 from .render_queue import RenderQueue
 from .storage import ProjectStorage
 from .video_merger import VideoMergeError, VideoMerger
+
+LOGGER = get_logger("video")
 
 
 def build_video_router(
@@ -43,7 +46,11 @@ def build_video_router(
                 detail="Hãy thêm và xác thực cookie Google Flow trước khi tạo video",
             )
         try:
-            return await queue.enqueue(project_id, request.scene_ids)
+            return await queue.enqueue(
+                project_id,
+                request.scene_ids,
+                force_rerender=request.force_rerender,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -86,7 +93,17 @@ def build_video_router(
 
         async def run_merge() -> None:
             try:
-                result = await merger.merge(project)
+
+                def update_progress(value: int) -> None:
+                    latest_progress = storage.get(project_id)
+                    if not latest_progress or latest_progress.final_video.status != "Merging":
+                        return
+                    bounded = max(10, min(95, value))
+                    if bounded > latest_progress.final_video.progress:
+                        latest_progress.final_video.progress = bounded
+                        storage.save(latest_progress)
+
+                result = await merger.merge(project, progress=update_progress)
                 latest = storage.get(project_id)
                 if not latest:
                     return
@@ -110,7 +127,9 @@ def build_video_router(
                 latest = storage.get(project_id)
                 if latest:
                     ready = all(
-                        scene.status == "Completed" and bool(scene.result_file)
+                        scene.status == "Accepted"
+                        and scene.acceptance.status == "Accepted"
+                        and bool(scene.result_file)
                         for scene in latest.scenes
                     )
                     latest.final_video = FinalVideo(
@@ -120,6 +139,7 @@ def build_video_router(
                     storage.save(latest)
                 raise
             except Exception as exc:
+                LOGGER.exception("Final video merge failed project=%s", project_id)
                 latest = storage.get(project_id)
                 if latest:
                     message = str(exc) if isinstance(exc, VideoMergeError) else type(exc).__name__

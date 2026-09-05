@@ -11,7 +11,7 @@ from typing import Any
 
 from ..models import AnalyzeRequest, Project, utc_now
 
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 13
 
 
 class CheckpointError(RuntimeError):
@@ -175,5 +175,5 @@ class AnalysisCheckpointStore:
             await asyncio.to_thread(transactional_write)
         except (OSError, sqlite3.Error) as exc:
             raise CheckpointError(
-                "Không thể lưu checkpoint phân tích vào thư mục làm việc"
+                "KhÃ´ng thá»ƒ lÆ°u checkpoint phÃ¢n tÃ­ch vÃ o thÆ° má»¥c lÃ m viá»‡c"
             ) from exc

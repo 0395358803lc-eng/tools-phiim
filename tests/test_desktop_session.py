@@ -52,7 +52,8 @@ def test_selected_workspace_backs_the_desktop_api(monkeypatch, tmp_path: Path) -
     )
     try:
         url = session._start_backend(tmp_path)
-        with urllib.request.urlopen(f"{url}/api/session", timeout=5) as response:
+        base_url = url.split("/#", 1)[0]
+        with urllib.request.urlopen(f"{base_url}/api/session", timeout=5) as response:
             payload = json.load(response)
         assert payload["fresh_start"] is True
         assert Path(payload["workspace"]) == tmp_path.resolve()

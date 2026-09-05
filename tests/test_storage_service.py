@@ -37,14 +37,24 @@ def test_storage_and_scene_edit(tmp_path: Path) -> None:
         assert any("có thể ảnh hưởng" in item for item in updated.scenes[1].warnings)
 
 
-def test_reorder_keeps_canonical_scene_ids(tmp_path: Path) -> None:
+def test_reorder_preserves_scene_identity_and_media_artifacts(tmp_path: Path) -> None:
     service = StudioService(ProjectStorage(tmp_path))
     project = service.analyze(AnalyzeRequest(name="Order", original_text=TEXT))
     ids = [scene.id for scene in project.scenes]
-    reordered = service.reorder(project.id, ReorderRequest(scene_ids=list(reversed(ids))))
-    assert [scene.id for scene in reordered.scenes] == [
-        f"SCENE_{index:03d}" for index in range(1, len(ids) + 1)
-    ]
+    assert ids
+    media_scene = project.scenes[-1]
+    media_scene.status = "Completed"
+    media_scene.progress = 100
+    media_scene.result_file = f"renders/{project.id}/{media_scene.id}/result.mp4"
+    media_scene.result_url = f"/api/projects/{project.id}/scenes/{media_scene.id}/video"
+    service.storage.save(project)
+    requested = list(reversed(ids))
+    reordered = service.reorder(project.id, ReorderRequest(scene_ids=requested))
+    assert [scene.id for scene in reordered.scenes] == requested
+    assert [scene.order for scene in reordered.scenes] == list(range(1, len(ids) + 1))
+    moved = next(scene for scene in reordered.scenes if scene.id == media_scene.id)
+    assert moved.result_file.endswith(f"/{media_scene.id}/result.mp4")
+    assert moved.result_url.endswith(f"/scenes/{media_scene.id}/video")
 
 
 def test_reorder_rejects_duplicate_scene_ids(tmp_path: Path) -> None:

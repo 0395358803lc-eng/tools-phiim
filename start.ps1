@@ -2,16 +2,17 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $projectRoot
 
-if (-not (Test-Path -LiteralPath ".venv\Scripts\python.exe")) {
-    python -m venv .venv
+$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $python)) {
+    throw "Environment is not set up. Run .\setup.ps1 first."
 }
 
-$flowCliWheel = Get-ChildItem -LiteralPath (Join-Path $projectRoot "vendor") -Filter "flow_cli-*.whl" | Select-Object -First 1
-if (-not $flowCliWheel) {
-    throw "Vendored Flow CLI wheel not found"
+& $python -c "import flow_story_studio"
+if ($LASTEXITCODE -ne 0) {
+    throw "Project dependencies are incomplete. Run .\setup.ps1 again."
 }
 
-& ".venv\Scripts\python.exe" -m pip install $flowCliWheel.FullName
-& ".venv\Scripts\python.exe" -m pip install -e .
-& ".venv\Scripts\python.exe" -m playwright install chromium
-& ".venv\Scripts\python.exe" -m flow_story_studio.desktop
+& $python -m flow_story_studio.desktop
+if ($LASTEXITCODE -ne 0) {
+    throw "TH Media exited with code $LASTEXITCODE"
+}

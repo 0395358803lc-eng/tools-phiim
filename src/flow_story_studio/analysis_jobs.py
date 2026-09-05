@@ -27,9 +27,10 @@ class AnalysisJobRegistry:
         if len(logs) > self.max_logs:
             del logs[: len(logs) - self.max_logs]
 
-    def prune(self) -> None:
+    def prune(self) -> bool:
+        """Prune terminal jobs and report whether one new job can be admitted."""
         if len(self.jobs) < self.max_jobs:
-            return
+            return True
         removable = sorted(
             (job for job in self.jobs.values() if job.get("status") in self.TERMINAL),
             key=lambda item: str(item.get("updated_at", "")),
@@ -39,6 +40,7 @@ class AnalysisJobRegistry:
             job_id = str(old.get("id", ""))
             self.jobs.pop(job_id, None)
             self.tasks.pop(job_id, None)
+        return len(self.jobs) < self.max_jobs
 
     @staticmethod
     def snapshot(job: dict[str, Any]) -> dict[str, Any]:

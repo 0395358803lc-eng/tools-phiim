@@ -1,4 +1,8 @@
+const initialSessionToken = new URLSearchParams(window.location.hash.slice(1)).get("session") || "";
+if (initialSessionToken) history.replaceState(null, "", window.location.pathname + window.location.search);
+
 const state = {
+  sessionToken: initialSessionToken,
   project: null,
   activeSceneId: null,
   sceneFilter: "all",
@@ -23,7 +27,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(state.sessionToken ? { "X-Flow-Studio-Session": state.sessionToken } : {}), ...(options.headers || {}) },
     ...options,
   });
   if (!response.ok) {
@@ -274,7 +278,7 @@ function renderResult(scene) {
   const stage = $("#resultStage");
   if (scene.result_url && !scene.result_url.startsWith("mock:")) {
     syncVideoElement(stage, scene.result_url, `scene:${scene.id}:${scene.result_url}`, 360);
-  } else if (scene.status === "Completed") {
+  } else if (scene.status === "Accepted") {
     stage.innerHTML = `<div class="film-placeholder"><span>✓</span><p>Đã hoàn tất (${escapeHtml(scene.provider_job_id)})</p><small>${scene.result_url.startsWith("mock:") ? "Kết quả mô phỏng — chuyển provider sang Google Flow để render thật." : escapeHtml(scene.result_url)}</small></div>`;
   } else {
     stage.innerHTML = `<div class="film-placeholder"><span>${scene.status === "Generating" ? "…" : "▶"}</span><p>${escapeHtml(scene.status)} · ${scene.progress}%</p></div>`;
@@ -303,13 +307,13 @@ function syncVideoElement(stage, url, mediaKey, maxHeight = null) {
 
 function renderQueue() {
   const scenes = state.project?.scenes || [];
-  $("#queueList").innerHTML = scenes.map((scene) => `<article class="queue-item"><header><code>${scene.id}</code><span>${scene.status}</span></header><div class="progress"><i style="width:${scene.progress}%"></i></div><p>${escapeHtml(scene.summary)}</p>${scene.status === "Failed" ? `<button class="secondary-btn full retry-btn" data-retry="${scene.id}" style="margin-top:9px">Retry scene</button>` : ""}</article>`).join("") || `<div class="empty-copy">Hàng đợi trống.</div>`;
-  $$(".retry-btn").forEach((button) => button.onclick = () => generate([button.dataset.retry]));
+  $("#queueList").innerHTML = scenes.map((scene) => `<article class="queue-item"><header><code>${scene.id}</code><span>${scene.status}</span></header><div class="progress"><i style="width:${scene.progress}%"></i></div><p>${escapeHtml(scene.summary)}</p>${["Failed", "FailedQC"].includes(scene.status) ? `<button class="secondary-btn full retry-btn" data-retry="${scene.id}" data-force="${scene.status === "FailedQC" ? "true" : "false"}" style="margin-top:9px">${scene.status === "FailedQC" ? "Force rerender" : "Recover / retry"}</button>` : ""}</article>`).join("") || `<div class="empty-copy">Hàng đợi trống.</div>`;
+  $(".retry-btn").forEach((button) => button.onclick = () => generate([button.dataset.retry], button.dataset.force === "true"));
 }
 
 function finalVideoReady() {
   return Boolean(state.project?.scenes?.length)
-    && state.project.scenes.every((scene) => scene.status === "Completed" && scene.result_file);
+    && state.project.scenes.every((scene) => scene.status === "Accepted" && scene.result_file);
 }
 
 function renderFinalVideo() {
@@ -592,7 +596,7 @@ async function uploadReference() {
   if (!scene || !file) return toast("Hãy chọn ảnh JPEG, PNG hoặc WebP", true);
   try {
     const response = await fetch(`/api/projects/${state.project.id}/scenes/${scene.id}/reference`, {
-      method: "POST", headers: { "Content-Type": file.type }, body: file,
+      method: "POST", headers: { "Content-Type": file.type, ...(state.sessionToken ? { "X-Flow-Studio-Session": state.sessionToken } : {}) }, body: file,
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -679,7 +683,7 @@ async function createProject(autoPipeline = false) {
     if (finished.status !== "completed" || !finished.project) {
       throw new Error(finished.error || "Phân tích không hoàn tất");
     }
-    const project = finished.project;
+    const project = await api(`/api/projects/${finished.project.id}`);
     state.queueActive = autoPipeline;
     $("#newProjectModal").close();
     renderProject(project, false);
@@ -694,14 +698,14 @@ async function createProject(autoPipeline = false) {
   }
 }
 
-async function generate(sceneIds) {
+async function generate(sceneIds, forceRerender = false) {
   if (!state.project) return;
   if (state.project.settings.provider === "google-flow" && !state.flowConfigured) {
     $("#videoSetupModal").showModal();
     return toast("Hãy thiết lập Google Flow trước khi tạo video", true);
   }
   try {
-    const project = await api(`/api/projects/${state.project.id}/generate`, { method: "POST", body: JSON.stringify({ scene_ids: sceneIds }) });
+    const project = await api(`/api/projects/${state.project.id}/generate`, { method: "POST", body: JSON.stringify({ scene_ids: sceneIds, force_rerender: forceRerender }) });
     state.queueActive = true;
     renderProject(project);
     toast(`Đã đưa ${sceneIds.length || project.scenes.length} scene vào hàng đợi`);
@@ -711,7 +715,7 @@ async function generate(sceneIds) {
 function updatePolling() {
   clearInterval(state.poller);
   if (!state.project) return;
-  const processing = state.project.scenes.some((scene) => ["Preparing", "Generating", "Paused"].includes(scene.status));
+  const processing = state.project.scenes.some((scene) => ["Preparing", "Generating", "QC", "Paused"].includes(scene.status));
   const queuedWaiting = state.queueActive && state.project.scenes.some((scene) => scene.status === "Waiting");
   const merging = state.project.final_video?.status === "Merging";
   const active = processing || queuedWaiting || merging;
@@ -828,7 +832,7 @@ function bindEvents() {
     catch (error) { toast(error.message, true); }
   };
   $("#copyPromptBtn").onclick = async () => { await navigator.clipboard.writeText($("#editFlowPrompt").value); toast("Đã sao chép prompt"); };
-  $("#generateSceneBtn").onclick = () => activeScene() && generate([activeScene().id]);
+  $("#generateSceneBtn").onclick = () => activeScene() && generate([activeScene().id], true);
   $("#generateAllBtn").onclick = () => generate([]);
   $("#mergeAllBtn").onclick = () => startFinalVideoMerge(false);
   $("#startMergeBtn").onclick = () => startFinalVideoMerge(true);
@@ -840,7 +844,7 @@ function bindEvents() {
   $("#generateSelectedBtn").onclick = () => {
     const ids = state.project.scenes.filter((scene) => scene.selected).map((scene) => scene.id);
     if (!ids.length) return toast("Hãy chọn ít nhất một scene", true);
-    generate(ids);
+    generate(ids, true);
   };
   const checkContinuity = async () => {
     try { renderProject(await api(`/api/projects/${state.project.id}/continuity?auto_fix=true`, { method: "POST" })); toast("Đã đồng bộ start/end frame và kiểm tra continuity"); }
@@ -869,7 +873,12 @@ function bindEvents() {
   $$("#projectTabs button").forEach((button) => button.onclick = () => switchTab("#projectTabs", ".tab-content", button, "tab", "panel"));
   $$("#editorTabs button").forEach((button) => button.onclick = () => switchTab("#editorTabs", ".editor-page", button, "editorTab", "editorPanel"));
   $("#queueBtn").onclick = openQueue; $("#closeQueueBtn").onclick = closeQueue; $("#scrim").onclick = closeQueue;
-  $("#pauseQueueBtn").onclick = async () => { renderProject(await api(`/api/projects/${state.project.id}/queue/pause`, { method: "POST" })); toast("Đã tạm dừng hàng đợi"); };
+  $("#pauseQueueBtn").onclick = async () => {
+    const project = await api(`/api/projects/${state.project.id}/queue/pause`, { method: "POST" });
+    const activeRender = project.scenes.some((scene) => ["Preparing", "Generating"].includes(scene.status));
+    renderProject(project);
+    toast(activeRender ? "Đã tạm dừng hàng đợi; scene đang render sẽ hoàn tất trước khi dừng" : "Đã tạm dừng hàng đợi");
+  };
   $("#resumeQueueBtn").onclick = async () => { renderProject(await api(`/api/projects/${state.project.id}/queue/resume`, { method: "POST" })); toast("Đã tiếp tục hàng đợi"); };
 }
 

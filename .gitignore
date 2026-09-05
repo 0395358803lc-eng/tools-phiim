@@ -2,15 +2,44 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
 *.py[cod]
+*.bak
+*.tmp
+*.prodtmp
+*.prodpatch
+
+# Local/runtime project data
 data/projects/*.json
+data/backups/
 data/exports/
 data/renders/
 data/references/
 data/secrets/
+data/checkpoints/
+data/analysis-checkpoints/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.flow-story-studio.lock
+.xkiro_*_checkpoint
+
+# Google Flow / browser authentication runtime
+.gflow/
+scripts/_flow_cli_cookies.json
+scripts/*cookies*.json
+
+# Build artifacts
 build/
 dist/
 *.spec
 .acceptance/
+installer/prereqs/*.exe
+
+# Local secrets
 .env
 .env.local

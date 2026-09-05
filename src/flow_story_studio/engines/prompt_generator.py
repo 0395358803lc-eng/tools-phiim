@@ -84,6 +84,7 @@ def make_flow_prompt(
     location: Location,
     visual_style: str,
     previous_scene_id: str | None,
+    all_characters: list[Character] | None = None,
 ) -> str:
     continuity = (
         f"Direct continuation of {previous_scene_id}."
@@ -91,12 +92,26 @@ def make_flow_prompt(
         else "Opening scene; establish the canonical story world."
     )
     character_text = "\n".join(describe_character(item) for item in characters)
+    name_by_id = {item.id: item.name for item in (all_characters or characters)}
+    dialogue_lines = [
+        f'- {name_by_id.get(item.character_id, item.character_id)}: "{item.text}" '
+        f"[delivery/emotion: {item.emotion}]"
+        for item in scene.dialogues
+    ]
+    if scene.voiceover:
+        dialogue_lines.append(f'- VOICEOVER/NARRATION: "{scene.voiceover}"')
+    audio_text = "\n".join(dialogue_lines) or "No spoken dialogue or voiceover in this scene."
     return f"""SCENE ID: {scene.id}
 
 CANONICAL CONTINUITY LOCK — DO NOT REINTERPRET OR REDESIGN ANY LOCKED ATTRIBUTE.
 
 Continuity:
 {continuity}
+
+VISUAL BIBLE LOCKS:
+{scene.visual_plan.lock_prompt or "Use canonical project visual identity without redesign."}
+Dependency mode: {scene.visual_plan.dependency_mode};
+anchor scene: {scene.visual_plan.anchor_scene_id or scene.id}.
 
 Character:
 {character_text or "No visible character; preserve established world."}
@@ -115,6 +130,13 @@ Lighting:
 
 Environment:
 {scene.atmosphere}
+
+AUDIO / DIALOGUE LOCK:
+{audio_text}
+Use the exact source-grounded speaker and words above. Do not paraphrase, invent narration,
+change speaker identity, or turn on-screen text/stage direction into spoken audio. When a line is
+phone/recorded/off-screen by scene context, preserve that delivery without making the speaker
+visible.
 
 Visual style:
 {visual_style}

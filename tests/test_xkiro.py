@@ -277,7 +277,7 @@ async def test_xkiro_changes_repair_prompt_to_escape_cached_nested_object() -> N
 
 
 @pytest.mark.asyncio
-async def test_xkiro_checkpoints_each_repaired_scene_before_later_failure(
+async def test_xkiro_falls_back_to_source_truth_after_repair_exhaustion(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("XKIRO_STRUCTURE_REPAIR_ATTEMPTS", "2")
@@ -299,36 +299,26 @@ async def test_xkiro_checkpoints_each_repaired_scene_before_later_failure(
         )
 
     request = AnalyzeRequest(
-        name="Per-scene checkpoint",
+        name="Per-scene source-truth fallback",
         original_text=" ".join(
             f"Sau đó cô gái thực hiện hành động thứ {index} trong căn phòng."
             for index in range(1, 7)
         ),
         settings=VideoSettings(analysis_provider="xkiro", analysis_model="qwen/test-free"),
     )
-    first = XKiroClient(transport=transport(fail_fourth_scene), checkpoint_root=checkpoint_root)
-    await first.connect("sk-xt-valid")
-    with pytest.raises(XKiroError, match="SCENE_004"):
-        await first.analyze(request)
-
-    checkpoint_file = next(checkpoint_root.glob("*.sqlite3"))
-    with sqlite3.connect(checkpoint_file) as connection:
-        saved_ids = {
-            row[0]
-            for row in connection.execute(
-                "SELECT scene_id FROM checkpoint_scenes ORDER BY scene_id"
-            )
-        }
-    assert saved_ids == {"SCENE_001", "SCENE_002", "SCENE_003"}
-
-    resumed = XKiroClient(transport=transport(), checkpoint_root=checkpoint_root)
-    await resumed.connect("sk-xt-valid")
+    client = XKiroClient(transport=transport(fail_fourth_scene), checkpoint_root=checkpoint_root)
+    await client.connect("sk-xt-valid")
     logs: list[tuple[str, str]] = []
-    project = await resumed.analyze(
+    project = await client.analyze(
         request, progress=lambda message, level: logs.append((level, message))
     )
+
     assert len(project.scenes) == 6
-    assert any("checkpoint từng cảnh: 3/6" in message for _, message in logs)
+    scene = next(item for item in project.scenes if item.id == "SCENE_004")
+    assert "Source-truth fallback" in scene.ai_lock_reason
+    assert any("source-truth" in warning for warning in scene.warnings)
+    assert any(level == "warning" and "source-truth" in message for level, message in logs)
+    assert list(checkpoint_root.glob("*.sqlite3"))
 
 
 @pytest.mark.asyncio
@@ -654,3 +644,28 @@ async def test_xkiro_scales_to_a_multi_hour_thousand_scene_project(
     assert scene_calls == 125
     assert project.continuity_score == 100
     assert project.scenes[-1].start_state == project.scenes[-2].end_state
+
+
+def test_world_merge_prevents_semantic_id_hijack() -> None:
+    from flow_story_studio.analysis_providers.prompting import merge_world
+
+    current = {
+        "story_bible": {},
+        "characters": [{"id": "CHAR_001", "name": "Minh"}],
+        "locations": [{"id": "LOC_001", "name": "Quán cà phê"}],
+        "props": [{"id": "PROP_001", "name": "Điện thoại"}],
+    }
+    update = {
+        "characters": [{"id": "CHAR_001", "name": "Bác sĩ cấp cứu"}],
+        "locations": [{"id": "LOC_001", "name": "Hiện trường tai nạn"}],
+        "props": [{"id": "PROP_001", "name": "Biển cảnh báo"}],
+    }
+
+    merged = merge_world(current, update)
+
+    assert merged["characters"][0] == {"id": "CHAR_001", "name": "Minh"}
+    assert merged["locations"][0] == {"id": "LOC_001", "name": "Quán cà phê"}
+    assert merged["props"][0] == {"id": "PROP_001", "name": "Điện thoại"}
+    assert merged["characters"][1]["id"] == "CHAR_002"
+    assert merged["locations"][1]["id"] == "LOC_002"
+    assert merged["props"][1]["id"] == "PROP_002"

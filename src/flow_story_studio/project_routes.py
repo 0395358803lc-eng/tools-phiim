@@ -60,6 +60,21 @@ def build_project_router(
         await queue.enqueue(project.id, [])
         return project
 
+    @router.get("/api/projects/{project_id}/backups")
+    async def list_project_backups(project_id: str) -> list[dict[str, object]]:
+        required(project_id)
+        return storage.backup_metadata(project_id)
+
+    @router.post("/api/projects/{project_id}/backups/{backup_name}/restore", response_model=Project)
+    async def restore_project_backup(project_id: str, backup_name: str) -> Project:
+        required(project_id)
+        try:
+            return storage.restore_backup(project_id, backup_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Backup not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @router.get("/api/projects/{project_id}", response_model=Project)
     async def get_project(project_id: str) -> Project:
         return required(project_id)

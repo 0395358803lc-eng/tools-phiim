@@ -173,7 +173,8 @@ def chain_scene_states(
 ) -> dict[str, Any] | None:
     anchor = deepcopy(previous)
     for item in ordered:
-        if anchor is not None:
+        start_state = item.get("start_state")
+        if anchor is not None and (not isinstance(start_state, dict) or not start_state):
             item["start_state"] = deepcopy(anchor)
         end_state = item.get("end_state")
         if isinstance(end_state, dict):

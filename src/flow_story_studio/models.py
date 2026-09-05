@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .migrations import CURRENT_PROJECT_SCHEMA_VERSION
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
@@ -117,6 +119,73 @@ class QualityReport(StrictModel):
     recommendation: str = "Đạt"
 
 
+class VisualIssue(StrictModel):
+    code: str
+    severity: Literal["warning", "error"] = "error"
+    message: str = ""
+
+
+class VisualQCReport(StrictModel):
+    status: Literal["Pending", "Passed", "Failed", "Unavailable"] = "Pending"
+    score: int = Field(default=0, ge=0, le=100)
+    character_identity: int = Field(default=0, ge=0, le=100)
+    location_identity: int = Field(default=0, ge=0, le=100)
+    prop_consistency: int = Field(default=0, ge=0, le=100)
+    wardrobe_consistency: int = Field(default=0, ge=0, le=100)
+    lighting_consistency: int = Field(default=0, ge=0, le=100)
+    composition_consistency: int = Field(default=0, ge=0, le=100)
+    first_frame: str = ""
+    middle_frame: str = ""
+    last_frame: str = ""
+    model_id: str = ""
+    issues: list[VisualIssue] = Field(default_factory=list)
+
+
+class ContinuityQCReport(StrictModel):
+    status: Literal["NotApplicable", "Pending", "Passed", "Failed", "Unavailable"] = "NotApplicable"
+    score: int = Field(default=100, ge=0, le=100)
+    character_match: int = Field(default=100, ge=0, le=100)
+    location_match: int = Field(default=100, ge=0, le=100)
+    wardrobe_match: int = Field(default=100, ge=0, le=100)
+    prop_state_match: int = Field(default=100, ge=0, le=100)
+    lighting_match: int = Field(default=100, ge=0, le=100)
+    screen_direction_match: int = Field(default=100, ge=0, le=100)
+    model_id: str = ""
+    issues: list[VisualIssue] = Field(default_factory=list)
+
+
+class ProductionAcceptance(StrictModel):
+    status: Literal["Pending", "Accepted", "Rejected", "Blocked"] = "Pending"
+    score: int = Field(default=0, ge=0, le=100)
+    reasons: list[str] = Field(default_factory=list)
+
+
+class VisualReference(StrictModel):
+    id: str
+    entity_type: Literal["character", "location", "prop"]
+    entity_id: str
+    name: str
+    lock_text: str
+    reference_images: list[str] = Field(default_factory=list)
+    status: Literal["missing", "candidate", "approved", "rejected"] = "missing"
+    approved_reference: str = ""
+    source_scene_id: str = ""
+
+
+class VisualBible(StrictModel):
+    version: int = 1
+    references: list[VisualReference] = Field(default_factory=list)
+
+
+class SceneVisualPlan(StrictModel):
+    dependency_mode: Literal["opening", "direct", "canonical"] = "canonical"
+    anchor_scene_id: str = ""
+    character_reference_ids: list[str] = Field(default_factory=list)
+    location_reference_id: str = ""
+    prop_reference_ids: list[str] = Field(default_factory=list)
+    lock_prompt: str = ""
+
+
 class Scene(StrictModel):
     id: str
     order: int
@@ -137,9 +206,19 @@ class Scene(StrictModel):
     start_state: ContinuityState
     end_state: ContinuityState
     reference_image: str = ""
-    status: Literal["Waiting", "Preparing", "Generating", "Completed", "Failed", "Paused"] = (
-        "Waiting"
-    )
+    visual_plan: SceneVisualPlan = Field(default_factory=SceneVisualPlan)
+    status: Literal[
+        "Waiting",
+        "Preparing",
+        "Generating",
+        "QC",
+        "Accepted",
+        "FailedQC",
+        "Blocked",
+        "Failed",
+        "Paused",
+        "Completed",
+    ] = "Waiting"
     progress: int = Field(default=0, ge=0, le=100)
     selected: bool = False
     warnings: list[str] = Field(default_factory=list)
@@ -152,6 +231,9 @@ class Scene(StrictModel):
     upstream_media_id: str = ""
     upstream_resource_name: str = ""
     quality: QualityReport | None = None
+    visual_qc: VisualQCReport = Field(default_factory=VisualQCReport)
+    continuity_qc: ContinuityQCReport = Field(default_factory=ContinuityQCReport)
+    acceptance: ProductionAcceptance = Field(default_factory=ProductionAcceptance)
     ai_locked: bool = False
     ai_lock_reason: str = "Scene cũ chưa được AI Continuity Lock duyệt"
 
@@ -167,6 +249,7 @@ class FinalVideo(StrictModel):
 
 
 class Project(StrictModel):
+    schema_version: int = CURRENT_PROJECT_SCHEMA_VERSION
     id: str
     name: str
     original_text: str
@@ -180,6 +263,7 @@ class Project(StrictModel):
     timeline: list[str] = Field(default_factory=list)
     visual_style: str
     master_prompt: str
+    visual_bible: VisualBible = Field(default_factory=VisualBible)
     scenes: list[Scene] = Field(default_factory=list)
     continuity_score: int = 100
     continuity_warnings: list[str] = Field(default_factory=list)
@@ -221,6 +305,7 @@ class SceneLockUpdate(StrictModel):
 
 class GenerateRequest(StrictModel):
     scene_ids: list[str] = Field(default_factory=list)
+    force_rerender: bool = False
 
 
 class VideoProviderUpdate(StrictModel):

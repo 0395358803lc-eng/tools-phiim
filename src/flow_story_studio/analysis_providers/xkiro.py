@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -158,6 +159,78 @@ class XKiroClient:
             models,
             key=lambda item: (item.owned_by.casefold(), item.display_name.casefold()),
         )
+
+    async def vision_json(
+        self,
+        images: list[Path],
+        prompt: str,
+        *,
+        model_id: str = "",
+    ) -> tuple[dict[str, Any], str]:
+        if not self._api_key:
+            raise XKiroError("xKiro is not configured for Vision QC")
+        models = await self.list_models(free_only=False)
+        vision = [item for item in models if bool(item.capabilities.get("vision"))]
+        if not vision:
+            raise XKiroError("No xKiro vision-capable model is available")
+        preferred = os.getenv("XKIRO_VISION_MODEL", "").strip() or model_id.strip()
+        priority = [
+            preferred,
+            "minimax/minimax-m3:free",
+        ]
+        ordered: list[XKiroModel] = []
+        by_id = {item.id: item for item in vision}
+        for candidate in priority:
+            if candidate and candidate in by_id and by_id[candidate] not in ordered:
+                ordered.append(by_id[candidate])
+        ordered.extend(item for item in vision if item not in ordered)
+
+        image_parts: list[dict[str, object]] = []
+        for path in images[:8]:
+            if not path.is_file():
+                continue
+            suffix = path.suffix.casefold()
+            mime = (
+                "image/png"
+                if suffix == ".png"
+                else "image/webp"
+                if suffix == ".webp"
+                else "image/jpeg"
+            )
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            image_parts.append(
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}
+            )
+        if not image_parts:
+            raise XKiroError("Vision QC has no readable input images")
+        content: list[dict[str, object]] = image_parts + [{"type": "text", "text": prompt}]
+        timeout = self._env_int("XKIRO_VISION_TIMEOUT", 180, 30, 900)
+        errors: list[str] = []
+        for model in ordered[:6]:
+            try:
+                async with self._client(
+                    timeout=httpx.Timeout(timeout, connect=min(30, timeout))
+                ) as client:
+                    response = await client.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": model.id,
+                            "messages": [{"role": "user", "content": content}],
+                            "temperature": 0,
+                            "max_tokens": 1200,
+                            "response_format": {"type": "json_object"},
+                        },
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                    )
+                if response.is_error:
+                    errors.append(f"{model.id}: {self._safe_error(response)}")
+                    continue
+                payload = response.json()
+                answer = message_content(payload["choices"][0]["message"])
+                return parse_json_object(answer), model.id
+            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+                errors.append(f"{model.id}: {type(exc).__name__}")
+        raise XKiroError("Vision QC failed across available models: " + "; ".join(errors[-3:]))
 
     async def connect(self, api_key: str) -> XKiroConnection:
         candidate = api_key.strip()
@@ -552,9 +625,29 @@ class XKiroClient:
                         "warning",
                     )
             if repaired is None:
-                raise XKiroError(
-                    f"Model không trả đủ dữ liệu bắt buộc cho {scene.id}. "
-                    "Checkpoint trước cảnh này vẫn được giữ."
+                repaired = {
+                    "id": scene.id,
+                    "summary": scene.summary,
+                    "characters": list(scene.characters),
+                    "location_id": scene.location_id,
+                    "action": scene.action,
+                    "camera": scene.camera,
+                    "lighting": scene.lighting,
+                    "atmosphere": scene.atmosphere,
+                    "voiceover": scene.voiceover,
+                    "dialogues": [dialogue.model_dump() for dialogue in scene.dialogues],
+                    "start_state": (
+                        deepcopy(continuity_anchor)
+                        if continuity_anchor is not None
+                        else scene.start_state.model_dump()
+                    ),
+                    "end_state": scene.end_state.model_dump(),
+                    "_source_truth_fallback": True,
+                }
+                emit(
+                    f"{scene.id}: model không trả đủ cấu trúc sau {structure_attempts} lần; "
+                    "dùng draft/source-truth an toàn và tiếp tục pipeline",
+                    "warning",
                 )
             if continuity_anchor is not None:
                 repaired["start_state"] = deepcopy(continuity_anchor)

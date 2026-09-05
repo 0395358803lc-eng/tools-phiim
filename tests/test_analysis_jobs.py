@@ -39,6 +39,14 @@ def test_registry_prunes_oldest_terminal_job() -> None:
     assert "running" in registry.jobs
 
 
+def test_registry_rejects_capacity_when_all_jobs_are_active() -> None:
+    registry = AnalysisJobRegistry(max_jobs=2)
+    registry.jobs["one"] = _job("one", "running", "2026-01-01T00:00:00Z")
+    registry.jobs["two"] = _job("two", "queued", "2026-01-02T00:00:00Z")
+    assert registry.prune() is False
+    assert set(registry.jobs) == {"one", "two"}
+
+
 def test_registry_snapshot_excludes_task_field() -> None:
     job = {"id": "job", "status": "queued", "task": object()}
     snapshot = AnalysisJobRegistry.snapshot(job)

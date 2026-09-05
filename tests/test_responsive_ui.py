@@ -57,3 +57,4 @@ def test_responsive_workspace_assets_are_embedded(tmp_path: Path) -> None:
     assert "Khóa bối cảnh" in index.text
     assert "Tự động giữ nhất quán" in index.text
     assert "function displayStyle(style)" in script.text
+    assert "const project = await api(`/api/projects/${finished.project.id}`);" in script.text

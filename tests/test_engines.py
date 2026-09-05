@@ -56,4 +56,5 @@ Minh nhấc điện thoại và lắng nghe trong im lặng.
     assert "lập trình viên 31 tuổi" not in cleaned
     assert "Giọng:" not in cleaned
     assert scenes
-    assert all("KỊCH BẢN" not in scene and "CẢNH 1" not in scene for scene in scenes)
+    assert all("KỊCH BẢN" not in scene for scene in scenes)
+    assert any("[SCENE CONTEXT] CẢNH 1" in scene for scene in scenes)

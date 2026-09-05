@@ -9,9 +9,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .analysis_jobs import AnalysisJobRegistry
 from .analysis_providers.xkiro import XKiroClient, XKiroError
+from .logging_config import get_logger
 from .models import AnalyzeRequest, utc_now
 from .render_queue import RenderQueue
 from .service import StudioService
+
+LOGGER = get_logger("analysis")
 
 
 def build_analysis_router(
@@ -28,7 +31,13 @@ def build_analysis_router(
     async def start_analysis_job(
         request: AnalyzeRequest, auto_pipeline: bool = Query(default=False)
     ) -> dict[str, object]:
-        registry.prune()
+        if not registry.prune():
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many analysis jobs are still active; wait for one to finish or cancel it"
+                ),
+            )
         job_id = uuid4().hex[:16]
         job: dict[str, object] = {
             "id": job_id,
@@ -110,6 +119,7 @@ def build_analysis_router(
                 job["error"] = str(exc)
                 registry.add_log(job, str(exc), "error")
             except Exception as exc:
+                LOGGER.exception("Analysis job failed job_id=%s", job_id)
                 job["status"] = "failed"
                 job["error"] = "Phân tích thất bại do lỗi nội bộ"
                 registry.add_log(job, f"{type(exc).__name__}: {exc}", "error")

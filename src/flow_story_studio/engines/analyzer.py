@@ -7,10 +7,12 @@ credentials. The public service boundary can later be backed by an LLM analyzer.
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from collections import Counter
 from copy import deepcopy
 
+from ..analysis_providers.audio_finalization import finalize_audio
 from ..models import (
     AnalyzeRequest,
     Character,
@@ -22,9 +24,16 @@ from ..models import (
     Scene,
     StoryBible,
 )
+from ..visual_bible import build_visual_bible
 from .continuity import check_project
 from .prompt_generator import global_visual_style, make_flow_prompt, make_visual_prompt
-from .segmenter import segment_story, speaking_duration
+from .segmenter import (
+    SCENE_CONTEXT_PREFIX,
+    SCENE_CONTEXT_SUFFIX,
+    allocate_scene_durations,
+    segment_story,
+    target_runtime_seconds,
+)
 
 GENRE_HINTS = {
     "kinh dị": ("Kinh dị", "Căng thẳng, bí ẩn"),
@@ -52,10 +61,12 @@ LOCATION_HINTS = {
     "nhà hàng": "Nhà hàng",
     "con đường": "Đường phố",
     "ngoài đường": "Đường phố",
+    "đường phố": "Đường phố",
     "khu rừng": "Khu rừng",
     "bãi biển": "Bãi biển",
     "ngôi nhà": "Ngôi nhà",
     "căn hộ": "Căn hộ",
+    "căn phòng": "Căn hộ",
 }
 
 PROP_HINTS = {
@@ -81,6 +92,235 @@ GENERIC_CHARACTERS = {
     "nhân viên": ("Nhân viên", "Không xác định"),
     "khách hàng": ("Khách hàng", "Không xác định"),
 }
+
+GENERIC_REFERENCE_NAMES = {
+    "anh",
+    "chị",
+    "cô",
+    "chú",
+    "bác",
+    "ông",
+    "bà",
+    "em",
+    "hắn",
+    "cậu",
+    "nàng",
+    "tôi",
+    "ta",
+    "mình",
+    "người đàn ông",
+    "người phụ nữ",
+    "the man",
+    "the woman",
+    "he",
+    "she",
+    "him",
+    "her",
+    "they",
+    "them",
+    "you",
+    "i",
+    "we",
+    "narrator",
+}
+
+CHARACTER_SECTION_RE = re.compile(r"\b(nhân\s*vật|characters?|cast)\b", re.IGNORECASE)
+PROP_SECTION_RE = re.compile(r"\b(đạo\s*cụ|props?|objects?)\b", re.IGNORECASE)
+SCENE_LOCATION_RE = re.compile(
+    r"^(?:#+\s*)?(?:cảnh|scene)\s*\d+\s*[—–:-]+\s*(?P<location>.+?)(?:\s*[—–|-]+\s*(?:đêm|ngày|sáng|chiều|tối|night|day|morning|evening|dawn|dusk)\b|$)",
+    re.IGNORECASE,
+)
+INT_EXT_LOCATION_RE = re.compile(
+    r"^(?:#+\s*)?(?:INT\.?|EXT\.?|INT\./EXT\.?)\s+(?P<location>.+?)(?:\s+-\s+(?:DAY|NIGHT|MORNING|EVENING|DAWN|DUSK)\b|$)",
+    re.IGNORECASE,
+)
+
+
+def _plain_line(raw: str) -> str:
+    value = re.sub(r"^#{1,6}\s+", "", raw.strip())
+    return re.sub(r"\*\*|__|`", "", value).strip()
+
+
+def _declared_items(text: str, section_re: re.Pattern[str]) -> list[str]:
+    lines = re.sub(r"\r\n?", "\n", text).splitlines()
+    active = False
+    values: list[str] = []
+    section_headers = re.compile(
+        r"^(?:nhân\s*vật(?:\s*chính)?|characters?|cast|đạo\s*cụ(?:\s*continuity|\s*cần.*)?|props?|objects?)\s*:?.*$",
+        re.IGNORECASE,
+    )
+    for raw in lines:
+        plain = _plain_line(raw)
+        if not plain:
+            continue
+        is_heading = bool(re.match(r"^#{1,6}\s+", raw.strip()))
+        if section_headers.match(plain):
+            active = bool(section_re.search(plain))
+            continue
+        if active and (
+            is_heading
+            or re.match(r"^(?:cảnh|scene)\s*\d+", plain, re.I)
+            or re.match(r"^(?:thể\s*loại|genre|thời\s*lượng|runtime|duration)\s*:", plain, re.I)
+        ):
+            active = False
+        if not active:
+            continue
+        match = re.match(r"^[-*+]\s*(.+)$", raw.strip())
+        candidate = _plain_line(match.group(1)) if match else plain
+        if not candidate or not re.search(r"[\wÀ-ỹ]", candidate, re.UNICODE):
+            continue
+        candidate = re.split(r"[,;:–—]", candidate, maxsplit=1)[0].strip().rstrip(".。")
+        if not candidate or not re.search(r"[\wÀ-ỹ]", candidate, re.UNICODE):
+            continue
+        if 1 <= len(candidate.split()) <= 8 and candidate not in values:
+            values.append(candidate)
+    return values
+
+
+def _declared_characters(text: str) -> list[str]:
+    return _declared_items(text, CHARACTER_SECTION_RE)
+
+
+def _standalone_speakers(text: str) -> list[str]:
+    """Recognize conventional screenplay dialogue labels such as JOHN or MARIA (V.O.)."""
+    lines = re.sub(r"\r\n?", "\n", text).splitlines()
+    blocked = {
+        "day",
+        "night",
+        "morning",
+        "evening",
+        "dawn",
+        "dusk",
+        "continuous",
+        "present",
+        "flashback",
+        "end",
+        "fade in",
+        "fade out",
+        "cut to",
+        "ngày",
+        "đêm",
+        "sáng",
+        "chiều",
+        "tối",
+        "liên tục",
+        "hiện tại",
+        "trở lại hiện tại",
+        "kết",
+        "nhân vật",
+        "nhân vật chính",
+        "đạo cụ",
+        "characters",
+        "character",
+        "cast",
+        "props",
+        "prop",
+        "objects",
+        "object",
+        "đang",
+        "dang",
+        "nhân viên",
+        "nhan vien",
+        "employee",
+        "staff",
+    }
+    values: list[str] = []
+    for index, raw in enumerate(lines):
+        plain = _plain_line(raw)
+        if not plain or len(plain) > 40 or ":" in plain:
+            continue
+        label = re.sub(r"\s*\((?:V\.?O\.?|O\.?S\.?|OFF)\)\s*$", "", plain, flags=re.I)
+        if not re.fullmatch(r"[A-ZÀ-Ỹ][A-ZÀ-Ỹ .'-]{1,30}", label):
+            continue
+        key = label.casefold().strip()
+        if key in blocked or key in GENERIC_REFERENCE_NAMES:
+            continue
+        if re.match(r"^(?:INT\.?|EXT\.?|INT\./EXT\.?|SCENE\b|CẢNH\b)", label, re.I):
+            continue
+        if len(label.split()) > 4:
+            continue
+        next_line = ""
+        for future in lines[index + 1 :]:
+            next_line = _plain_line(future)
+            if next_line:
+                break
+        if not next_line:
+            continue
+        if re.match(r"^(?:INT\.?|EXT\.?|INT\./EXT\.?|SCENE\b|CẢNH\b)", next_line, re.I):
+            continue
+        if key not in {item.casefold() for item in values}:
+            values.append(label.strip())
+    return values
+
+
+def _declared_props(text: str) -> list[str]:
+    return _declared_items(text, PROP_SECTION_RE)
+
+
+def _heading_locations(text: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for raw in re.sub(r"\r\n?", "\n", text).splitlines():
+        plain = _plain_line(raw)
+        name = ""
+        scene_match = re.match(r"^(?:cảnh|scene)\s*\d+\s*[—–:-]+\s*(.+)$", plain, re.IGNORECASE)
+        if scene_match:
+            remainder = scene_match.group(1).strip()
+            parts = [
+                part.strip() for part in re.split(r"\s+[—–]\s+|\s+-\s+", remainder) if part.strip()
+            ]
+            if parts:
+                name = parts[0]
+        else:
+            match = INT_EXT_LOCATION_RE.match(plain)
+            if match:
+                name = match.group("location").strip(" -—–|")
+        if name:
+            lowered_name = name.casefold()
+            context_only = {
+                "liên tục",
+                "continuous",
+                "hiện tại",
+                "present",
+                "flashback",
+                "trở lại hiện tại",
+                "return to present",
+                "kết",
+                "end",
+            }
+            if lowered_name in context_only:
+                continue
+            exact_match = next(
+                (
+                    canonical
+                    for hint, canonical in LOCATION_HINTS.items()
+                    if lowered_name == hint.casefold()
+                ),
+                None,
+            )
+            if exact_match is not None:
+                name = exact_match
+            else:
+                prefix = next(
+                    (
+                        (hint, canonical)
+                        for hint, canonical in LOCATION_HINTS.items()
+                        if lowered_name.startswith(hint.casefold() + " ")
+                    ),
+                    None,
+                )
+                if prefix is not None:
+                    hint, canonical = prefix
+                    suffix = name[len(hint) :].strip()
+                    name = f"{canonical} {suffix}".strip()
+                # For contained hints such as "PHÒNG TRỰC NHÀ GA" or
+                # "BÊN NGOÀI NHÀ GA", preserve the authored heading verbatim.
+        key = name.casefold()
+        if name and key not in seen:
+            values.append(name)
+            seen.add(key)
+    return values
+
 
 CAMERA_SEQUENCE = (
     "Establishing wide shot, slow dolly forward, stable screen direction",
@@ -110,20 +350,31 @@ def _story_bible(text: str) -> StoryBible:
 
 
 def _characters(text: str) -> list[Character]:
+    declared = _declared_characters(text)
+    speakers = _standalone_speakers(text) if not declared else []
+    declared_keys = {name.casefold() for name in declared}
+    found: list[tuple[str, str]] = [(name, "Không xác định") for name in declared]
+    found.extend(
+        (name, "Không xác định") for name in speakers if name.casefold() not in declared_keys
+    )
     lowered = text.lower()
-    found: list[tuple[str, str]] = []
-    for hint, identity in GENERIC_CHARACTERS.items():
-        if hint in lowered:
-            found.append(identity)
+    if not declared:
+        for hint, identity in GENERIC_CHARACTERS.items():
+            if hint in lowered and identity[0].casefold() not in GENERIC_REFERENCE_NAMES:
+                found.append(identity)
 
     quoted_speakers = re.findall(
         r"\b([A-ZÀ-Ỹ][a-zà-ỹ]{1,24})\s+(?:nói|hỏi|đáp|thì thầm|kêu|said|asked)\b",
         text,
     )
-    blocked = {"Sau", "Khi", "Trong", "Một", "Ngày", "Cuối", "Đột", "Nhưng", "Và"}
-    for name in quoted_speakers:
-        if name not in blocked:
-            found.append((name, "Không xác định"))
+    blocked = {"sau", "khi", "trong", "một", "ngày", "cuối", "đột", "nhưng", "và"}
+    for name in quoted_speakers if not declared else []:
+        key = name.casefold()
+        if key in blocked:
+            continue
+        if key in GENERIC_REFERENCE_NAMES and key not in declared_keys:
+            continue
+        found.append((name, "Không xác định"))
     if not found:
         found.append(("Nhân vật chính", "Không xác định"))
 
@@ -136,16 +387,24 @@ def _characters(text: str) -> list[Character]:
             unique.append((name, gender))
     return [
         Character(id=f"CHAR_{index:03d}", name=name, gender=gender)
-        for index, (name, gender) in enumerate(unique[:12], 1)
+        for index, (name, gender) in enumerate(unique[:24], 1)
     ]
 
 
 def _locations(text: str) -> list[Location]:
     lowered = text.lower()
-    names: list[str] = []
+    names = _heading_locations(text)
+    matches: list[tuple[int, str]] = []
     for hint, name in LOCATION_HINTS.items():
-        if hint in lowered and name not in names:
-            names.append(name)
+        position = lowered.find(hint)
+        if position >= 0:
+            matches.append((position, name))
+    for _, name in sorted(matches, key=lambda item: item[0]):
+        key = name.casefold()
+        existing = [item.casefold() for item in names]
+        if any(key in item or item in key for item in existing):
+            continue
+        names.append(name)
     if not names:
         names.append("Bối cảnh chính")
     return [
@@ -157,20 +416,48 @@ def _locations(text: str) -> list[Location]:
             space=f"Bố cục {name} được thiết lập ở cảnh đầu và tái sử dụng",
             interior=f"Nội thất và vật liệu nhất quán của {name}",
         )
-        for index, name in enumerate(names[:10], 1)
+        for index, name in enumerate(names[:24], 1)
     ]
 
 
 def _props(text: str) -> list[Prop]:
     lowered = text.lower()
-    names: list[str] = []
-    for hint, name in PROP_HINTS.items():
-        if hint in lowered and name not in names:
-            names.append(name)
+    names = _declared_props(text)
+    hint_items = PROP_HINTS.items() if not names else ()
+    for hint, name in hint_items:
+        if hint not in lowered:
+            continue
+        key = name.casefold()
+        existing = [item.casefold() for item in names]
+        if any(key in item or item in key for item in existing):
+            continue
+        names.append(name)
     return [
-        Prop(id=f"PROP_{index:03d}", name=name, description=f"{name} đúng như nội dung gốc")
-        for index, name in enumerate(names[:12], 1)
+        Prop(id=f"PROP_{index:03d}", name=name, description=f"{name} xuất hiện trong nội dung gốc")
+        for index, name in enumerate(names[:24], 1)
     ]
+
+
+def _semantic_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value).casefold().replace("đ", "d"))
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    return " ".join(re.findall(r"[a-z0-9]+", ascii_text))
+
+
+def _entity_mentioned(source_text: str, entity_name: str) -> bool:
+    source_tokens = set(_semantic_key(source_text).split())
+    name_tokens = [
+        token
+        for token in _semantic_key(entity_name).split()
+        if token not in {"cua", "the", "and", "mau", "color", "colour", "giay", "paper"}
+        and len(token) >= 2
+    ]
+    if not source_tokens or not name_tokens:
+        return False
+    if " ".join(name_tokens) in " ".join(source_tokens):
+        return True
+    overlap = sum(token in source_tokens for token in name_tokens)
+    return overlap >= (1 if len(name_tokens) == 1 else 2)
 
 
 def _ids_mentioned(text: str, characters: list[Character]) -> list[str]:
@@ -179,16 +466,37 @@ def _ids_mentioned(text: str, characters: list[Character]) -> list[str]:
     return matches or ([characters[0].id] if characters else [])
 
 
-def _location_for(text: str, locations: list[Location], previous: str | None) -> str:
+def _explicit_location_for(text: str, locations: list[Location]) -> str | None:
     lowered = text.lower()
     by_name = {location.name: location.id for location in locations}
+    candidates: list[tuple[int, str]] = []
     for hint, name in LOCATION_HINTS.items():
-        if hint in lowered and name in by_name:
-            return by_name[name]
+        position = lowered.find(hint)
+        if position >= 0 and name in by_name:
+            candidates.append((position, by_name[name]))
     for location in locations:
-        if location.name.lower() in lowered:
-            return location.id
-    return previous or locations[0].id
+        position = lowered.find(location.name.lower())
+        if position >= 0:
+            candidates.append((position, location.id))
+    if not candidates:
+        return None
+    # At the same textual position prefer the most specific canonical location name.
+    names_by_id = {location.id: location.name for location in locations}
+    return min(candidates, key=lambda item: (item[0], -len(names_by_id.get(item[1], ""))))[1]
+
+
+def _location_for(text: str, locations: list[Location], previous: str | None) -> str:
+    return _explicit_location_for(text, locations) or previous or locations[0].id
+
+
+def _scene_context_heading(text: str) -> str:
+    stripped = text.lstrip()
+    if not stripped.startswith(SCENE_CONTEXT_PREFIX):
+        return ""
+    context = stripped[len(SCENE_CONTEXT_PREFIX) :]
+    if SCENE_CONTEXT_SUFFIX in context:
+        context = context.split(SCENE_CONTEXT_SUFFIX, 1)[0]
+    return context.strip()
 
 
 def _dialogues(text: str, character_ids: list[str]) -> list[Dialogue]:
@@ -215,20 +523,60 @@ def analyze_story(request: AnalyzeRequest) -> Project:
         "identity, wardrobe, architecture, prop state, time, weather, lighting logic and "
         "causal action across every scene."
     )
+    runtime_seconds = target_runtime_seconds(request.original_text)
     chunks = segment_story(request.original_text, request.settings.scene_duration)
+    scene_durations = allocate_scene_durations(
+        chunks, runtime_seconds, request.settings.scene_duration
+    )
     scenes: list[Scene] = []
     previous_location: str | None = None
     previous_end: ContinuityState | None = None
-    prop_positions = {item.id: item.initial_location for item in props}
+    has_scene_context = any(chunk.lstrip().startswith(SCENE_CONTEXT_PREFIX) for chunk in chunks)
+    return_location_stack: list[str] = []
 
     for index, chunk in enumerate(chunks, 1):
         char_ids = _ids_mentioned(chunk, characters)
-        location_id = _location_for(chunk, locations, previous_location)
+        prop_positions = {
+            item.id: item.initial_location for item in props if _entity_mentioned(chunk, item.name)
+        }
+        is_scene_cut = chunk.lstrip().startswith(SCENE_CONTEXT_PREFIX)
+        if has_scene_context:
+            if is_scene_cut:
+                context_heading = _scene_context_heading(chunk)
+                context_lower = context_heading.casefold()
+                context_location = _explicit_location_for(context_heading, locations)
+                if "trở lại hiện tại" in context_lower and return_location_stack:
+                    location_id = return_location_stack.pop()
+                    context_location = _explicit_location_for(context_heading, locations)
+                    if context_location is not None:
+                        location_id = context_location
+                elif "flashback" in context_lower:
+                    if previous_location is not None:
+                        return_location_stack.append(previous_location)
+                    body = (
+                        chunk.split(SCENE_CONTEXT_SUFFIX, 1)[1]
+                        if SCENE_CONTEXT_SUFFIX in chunk
+                        else ""
+                    )
+                    location_id = (
+                        context_location
+                        or _explicit_location_for(body, locations)
+                        or previous_location
+                        or locations[0].id
+                    )
+                else:
+                    location_id = context_location or previous_location or locations[0].id
+            else:
+                location_id = previous_location or locations[0].id
+        else:
+            location_id = _location_for(chunk, locations, previous_location)
+        can_chain = (
+            previous_end is not None and previous_location == location_id and not is_scene_cut
+        )
         previous_location = location_id
         location = next(item for item in locations if item.id == location_id)
-        duration = max(request.settings.scene_duration, speaking_duration(chunk))
-        duration = min(30, duration)
-        if previous_end:
+        duration = scene_durations[index - 1]
+        if can_chain:
             start_state = deepcopy(previous_end)
         else:
             start_state = ContinuityState(
@@ -262,8 +610,8 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             duration=duration,
             visual_prompt="",
             flow_prompt="",
-            voiceover=chunk,
-            dialogues=_dialogues(chunk, char_ids),
+            voiceover="",
+            dialogues=[],
             start_state=start_state,
             end_state=end_state,
             ai_locked=True,
@@ -311,4 +659,18 @@ def analyze_story(request: AnalyzeRequest) -> Project:
         master_prompt=master_prompt,
         scenes=scenes,
     )
-    return check_project(project, auto_fix=request.settings.auto_continuity)
+    project = check_project(project, auto_fix=request.settings.auto_continuity)
+    project = finalize_audio(project)
+    project = build_visual_bible(project)
+    location_by_id = {item.id: item for item in project.locations}
+    for index, scene in enumerate(project.scenes):
+        visible_characters = [item for item in project.characters if item.id in scene.characters]
+        scene.flow_prompt = make_flow_prompt(
+            scene,
+            characters=visible_characters,
+            location=location_by_id[scene.location_id],
+            visual_style=project.visual_style,
+            all_characters=project.characters,
+            previous_scene_id=project.scenes[index - 1].id if index else None,
+        )
+    return project

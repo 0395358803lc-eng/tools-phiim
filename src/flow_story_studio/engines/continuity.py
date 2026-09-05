@@ -5,6 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 
 from ..models import Project, Scene
+from .segmenter import SCENE_CONTEXT_PREFIX
+
+
+def is_direct_continuation(previous: Scene | None, current: Scene) -> bool:
+    if previous is None:
+        return False
+    if previous.location_id != current.location_id:
+        return False
+    return not current.source_text.lstrip().startswith(SCENE_CONTEXT_PREFIX)
 
 
 def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> list[str]:
@@ -16,7 +25,7 @@ def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> 
         warnings.append(f"Nhân vật chưa có trong Bible: {', '.join(sorted(unknown))}")
     if current.location_id not in location_ids:
         warnings.append(f"Location {current.location_id} chưa có trong Bible")
-    if previous:
+    if is_direct_continuation(previous, current):
         if previous.end_state.time != current.start_state.time:
             warnings.append("Mốc thời gian đầu cảnh không khớp trạng thái cuối cảnh trước")
         for char_id, position in previous.end_state.character_positions.items():
@@ -42,11 +51,12 @@ def check_project(project: Project, auto_fix: bool = False) -> Project:
         retained = [
             warning
             for warning in scene.warnings
-            if warning.startswith("Thay đổi ở") or warning.startswith("Render failed:")
+            if warning.startswith("Thay đổi ở")
+            or warning.startswith("Render failed:")
+            or warning.startswith("xKiro ")
         ]
         scene.order = index + 1
-        scene.id = f"SCENE_{index + 1:03d}"
-        if previous and auto_fix:
+        if auto_fix and is_direct_continuation(previous, scene):
             scene.start_state = deepcopy(previous.end_state)
         scene.warnings = retained + scene_warnings(previous, scene, result)
         all_warnings.extend(f"{scene.id}: {warning}" for warning in scene.warnings)

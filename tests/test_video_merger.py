@@ -28,8 +28,10 @@ def completed_project(storage: ProjectStorage, data_root: Path):
         clip = data_root / "renders" / project.id / scene.id / f"clip-{index}.mp4"
         clip.parent.mkdir(parents=True, exist_ok=True)
         clip.write_bytes(f"video-{index}".encode())
-        scene.status = "Completed"
+        scene.status = "Accepted"
         scene.progress = 100
+        scene.acceptance.status = "Accepted"
+        scene.acceptance.score = 100
         scene.result_file = clip.relative_to(data_root).as_posix()
     return storage.save(project)
 
@@ -42,15 +44,21 @@ def test_merger_uses_storyboard_order_and_atomic_output(tmp_path: Path, monkeypa
     monkeypatch.setattr(merger, "ffmpeg_path", lambda: "ffmpeg")
     captured: dict[str, str] = {}
 
-    async def fake_execute(command: list[str]) -> tuple[int, str]:
+    async def fake_execute(
+        command: list[str], progress=None, expected_duration=0.0
+    ) -> tuple[int, str]:
         concat_path = Path(command[command.index("-i") + 1])
         captured["concat"] = concat_path.read_text(encoding="utf-8")
+        if progress:
+            progress(50)
         Path(command[-1]).write_bytes(b"joined-video")
         return 0, ""
 
     monkeypatch.setattr(merger, "_execute", fake_execute)
-    result = asyncio.run(merger.merge(project))
+    progress_values: list[int] = []
+    result = asyncio.run(merger.merge(project, progress=progress_values.append))
 
+    assert progress_values == [50]
     ordered = sorted(project.scenes, key=lambda scene: scene.order)
     positions = [captured["concat"].index(scene.result_file.split("/")[-1]) for scene in ordered]
     assert positions == sorted(positions)
@@ -110,7 +118,9 @@ def test_final_video_api_runs_in_background_and_serves_mp4(tmp_path: Path, monke
     merger = app.state.merger
     monkeypatch.setattr(merger, "ffmpeg_path", lambda: "ffmpeg")
 
-    async def fake_merge(current) -> VideoMergeResult:
+    async def fake_merge(current, progress=None) -> VideoMergeResult:
+        if progress:
+            progress(60)
         await asyncio.sleep(0)
         target = tmp_path / "renders" / current.id / "final" / "final-video.mp4"
         target.parent.mkdir(parents=True, exist_ok=True)

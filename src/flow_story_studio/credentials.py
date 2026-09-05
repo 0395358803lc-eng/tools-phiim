@@ -29,7 +29,7 @@ def _dpapi(data: bytes, *, protect: bool) -> bytes:
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
     function = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
-    description = "Flow Story Studio credentials" if protect else None
+    description = "TH Media credentials" if protect else None
     if not function(
         ctypes.byref(source), description, None, None, None, 0x01, ctypes.byref(target)
     ):

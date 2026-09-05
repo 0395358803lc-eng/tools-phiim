@@ -1,4 +1,4 @@
-# Flow Story Studio
+# TH Media
 
 Ứng dụng Windows desktop biến một văn bản dài thành **story world → story bible → timeline → storyboard → Google Flow prompts → chuỗi video** có continuity. Giao diện chạy trong cửa sổ riêng bằng WebView2; backend nội bộ và Flow CLI được đóng gói cùng EXE.
 
@@ -43,10 +43,10 @@ cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-Script tự cài Flow CLI, Playwright Chromium và mở cửa sổ **Flow Story Studio**. Trước tiên,
+Script tự cài Flow CLI, Playwright Chromium và mở cửa sổ **TH Media**. Trước tiên,
 ứng dụng yêu cầu chọn hoặc tạo thư mục làm việc. Các thư mục `projects`, `renders` và `references`
 sẽ được tạo bên trong thư mục này. Kho xác thực dùng chung nằm trong vùng dữ liệu người dùng của
-Flow Story Studio và được Windows mã hóa. Không cần chạy `flow api serve` và không cần mở
+TH Media và được Windows mã hóa. Không cần chạy `flow api serve` và không cần mở
 trình duyệt thủ công.
 
 Nếu muốn cài thủ công:
@@ -89,7 +89,7 @@ cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
 powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 ```
 
-Kết quả: `dist\FlowStoryStudio.exe`. Bản one-file chứa mã Flow CLI, Chromium Playwright, giao diện
+Kết quả: `dist\THMedia.exe`. Bản one-file chứa mã Flow CLI, Chromium Playwright, giao diện
 và FFmpeg nên dung lượng lớn; lần mở đầu tiên cần thời gian giải nén vào thư mục tạm.
 
 ## Phân tích nội dung bằng xKiro

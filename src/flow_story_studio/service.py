@@ -11,6 +11,7 @@ from .engines.continuity import check_project
 from .engines.prompt_generator import make_flow_prompt, make_visual_prompt
 from .models import AnalyzeRequest, FinalVideo, Project, ReorderRequest, SceneUpdate
 from .storage import ProjectStorage
+from .visual_bible import build_visual_bible
 
 
 class StudioService:
@@ -91,6 +92,7 @@ class StudioService:
                 characters=characters,
                 location=location,
                 visual_style=project.visual_style,
+                all_characters=project.characters,
                 previous_scene_id=project.scenes[scene_index - 1].id if scene_index else None,
             )
         if scene_index + 1 < len(project.scenes):
@@ -102,6 +104,15 @@ class StudioService:
         if protected:
             project.final_video = FinalVideo(status="NotReady")
         project = check_project(project, auto_fix=False)
+        if protected:
+            project = build_visual_bible(project)
+            for item in project.scenes:
+                if item.status not in {"Preparing", "Generating", "QC"}:
+                    item.status = "Waiting"
+                    item.progress = 0
+                    item.visual_qc.status = "Pending"
+                    item.continuity_qc.status = "NotApplicable"
+                    item.acceptance.status = "Pending"
         return self.storage.save(project)
 
     def set_scene_lock(self, project_id: str, scene_id: str, locked: bool) -> Project:
@@ -127,13 +138,20 @@ class StudioService:
             raise ValueError("Reorder must contain every scene exactly once")
         project.scenes = [deepcopy(current[scene_id]) for scene_id in request.scene_ids]
         project = check_project(project, auto_fix=project.settings.auto_continuity)
-        if all(scene.status == "Completed" and scene.result_file for scene in project.scenes):
-            project.final_video = FinalVideo(status="Ready", scene_count=len(project.scenes))
-        else:
-            project.final_video = FinalVideo(status="NotReady")
+        project = build_visual_bible(project)
+        for scene in project.scenes:
+            scene.status = "Waiting"
+            scene.progress = 0
+            scene.visual_qc.status = "Pending"
+            scene.continuity_qc.status = "NotApplicable"
+            scene.acceptance.status = "Pending"
+        project.final_video = FinalVideo(status="NotReady")
         return self.storage.save(project)
 
     def check_continuity(self, project_id: str, auto_fix: bool | None = None) -> Project:
         project = self.get_required(project_id)
         use_auto_fix = project.settings.auto_continuity if auto_fix is None else auto_fix
-        return self.storage.save(check_project(project, auto_fix=use_auto_fix))
+        project = check_project(project, auto_fix=use_auto_fix)
+        project = build_visual_bible(project)
+        project.final_video = FinalVideo(status="NotReady")
+        return self.storage.save(project)

@@ -1,8 +1,9 @@
-"""Flow Story Studio FastAPI application."""
+"""TH Media FastAPI application."""
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import sys
 from collections.abc import AsyncGenerator
@@ -12,7 +13,7 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -22,6 +23,7 @@ from .analysis_routes import build_analysis_router
 from .export_routes import build_export_router
 from .flow_integration import FlowCLIIntegration
 from .integration_routes import build_integration_router
+from .logging_config import get_logger
 from .models import (
     FinalVideo,
     Project,
@@ -38,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 STATIC_ROOT = RESOURCE_ROOT / "static"
 DATA_ROOT = Path(os.getenv("FLOW_STUDIO_DATA_DIR", PROJECT_ROOT / "data"))
+LOGGER = get_logger("api")
 
 
 def create_app(
@@ -45,15 +48,21 @@ def create_app(
     xkiro_client: XKiroClient | None = None,
     flow_integration: FlowCLIIntegration | None = None,
     credential_root: Path | None = None,
+    session_token: str | None = None,
 ) -> FastAPI:
     project_storage = storage or ProjectStorage(DATA_ROOT / "projects")
     runtime_data_root = project_storage.root.parent
     service = StudioService(project_storage)
     credential_dir = (credential_root or runtime_data_root / "secrets").resolve()
     flow = flow_integration or FlowCLIIntegration(runtime_data_root, credential_root=credential_dir)
-    queue = RenderQueue(project_storage, flow)
     xkiro = xkiro_client or XKiroClient(credential_path=credential_dir / "xkiro-api-key.bin")
     xkiro.set_checkpoint_root(runtime_data_root / "analysis-checkpoints")
+    queue = RenderQueue(
+        project_storage,
+        flow,
+        xkiro=xkiro,
+        data_root=runtime_data_root,
+    )
     merger = VideoMerger(runtime_data_root)
     analysis_registry = AnalysisJobRegistry()
     analysis_jobs = analysis_registry.jobs
@@ -77,7 +86,7 @@ def create_app(
         await queue.shutdown()
 
     app = FastAPI(
-        title="Flow Story Studio",
+        title="TH Media",
         version=__version__,
         description="Continuity-first storyboard and Google Flow render pipeline",
         lifespan=lifespan,
@@ -89,16 +98,34 @@ def create_app(
     app.state.xkiro = xkiro
     app.state.flow = flow
     app.state.analysis_jobs = analysis_jobs
+    app.state.session_auth_required = bool(session_token)
+
+    @app.middleware("http")
+    async def desktop_session_auth(request: Request, call_next):
+        if session_token and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+            supplied = request.headers.get("x-flow-studio-session", "")
+            if not hmac.compare_digest(supplied, session_token):
+                return JSONResponse(status_code=401, content={"detail": "Invalid desktop session"})
+        try:
+            return await call_next(request)
+        except Exception:
+            LOGGER.exception(
+                "Unhandled API error method=%s path=%s", request.method, request.url.path
+            )
+            raise
 
     def required(project_id: str) -> Project:
         try:
             project = service.get_required(project_id)
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
+            raise HTTPException(status_code=404, detail="KhÃ´ng tÃ¬m tháº¥y project") from exc
         merge_task = merge_tasks.get(project_id)
         if project.final_video.status == "Merging" and not (merge_task and not merge_task.done()):
             ready = all(
-                scene.status == "Completed" and bool(scene.result_file) for scene in project.scenes
+                scene.status == "Accepted"
+                and scene.acceptance.status == "Accepted"
+                and bool(scene.result_file)
+                for scene in project.scenes
             )
             project.final_video = FinalVideo(
                 status="Ready" if ready else "NotReady",
@@ -132,6 +159,7 @@ def create_app(
             "id": session_id,
             "workspace": str(runtime_data_root.resolve()),
             "fresh_start": True,
+            "session_auth_required": bool(session_token),
         }
 
     app.include_router(build_integration_router(flow, xkiro))

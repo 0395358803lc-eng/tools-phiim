@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +41,11 @@ class VideoMerger:
         clips: list[Path] = []
         incomplete: list[str] = []
         for scene in sorted(project.scenes, key=lambda item: item.order):
-            if scene.status != "Completed" or not scene.result_file:
+            if (
+                scene.status != "Accepted"
+                or scene.acceptance.status != "Accepted"
+                or not scene.result_file
+            ):
                 incomplete.append(scene.id)
                 continue
             clip = (self.data_root / scene.result_file).resolve()
@@ -58,11 +63,14 @@ class VideoMerger:
             )
         return clips
 
-    async def merge(self, project: Project) -> VideoMergeResult:
+    async def merge(
+        self, project: Project, progress: Callable[[int], None] | None = None
+    ) -> VideoMergeResult:
         ffmpeg = self.ffmpeg_path()
         if not ffmpeg:
             raise VideoMergeError("Không tìm thấy FFmpeg để ghép video")
         clips = self.clips_for(project)
+        expected_duration = float(sum(scene.duration for scene in project.scenes))
         output_dir = self.data_root / "renders" / project.id / "final"
         output_dir.mkdir(parents=True, exist_ok=True)
         concat_file = output_dir / ".concat-list.txt"
@@ -103,10 +111,13 @@ class VideoMerger:
             "192k",
             "-movflags",
             "+faststart",
+            "-progress",
+            "pipe:1",
+            "-nostats",
             str(temporary),
         ]
         try:
-            return_code, error = await self._execute(command)
+            return_code, error = await self._execute(command, progress, expected_duration)
             if return_code != 0 or not temporary.is_file() or temporary.stat().st_size <= 0:
                 detail = error.strip().splitlines()[-1][:500] if error.strip() else "lỗi không rõ"
                 raise VideoMergeError(f"FFmpeg không thể ghép video: {detail}")
@@ -124,16 +135,42 @@ class VideoMerger:
         return path.resolve().as_posix().replace("'", "'\\''")
 
     @staticmethod
-    async def _execute(command: list[str]) -> tuple[int, str]:
+    async def _execute(
+        command: list[str],
+        progress: Callable[[int], None] | None = None,
+        expected_duration: float = 0.0,
+    ) -> tuple[int, str]:
         process = await asyncio.create_subprocess_exec(
             *command,
-            stdout=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        if process.stdout is None or process.stderr is None:
+            process.terminate()
+            await process.wait()
+            raise RuntimeError("FFmpeg stdout/stderr pipes were not created")
+        stderr_task = asyncio.create_task(process.stderr.read())
         try:
-            _, stderr = await process.communicate()
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                if (
+                    progress
+                    and expected_duration > 0
+                    and line.startswith((b"out_time_us=", b"out_time_ms="))
+                ):
+                    try:
+                        elapsed = int(line.split(b"=", 1)[1]) / 1_000_000
+                    except (ValueError, IndexError):
+                        continue
+                    progress(min(99, max(1, round(elapsed / expected_duration * 100))))
+            await process.wait()
+            stderr = await stderr_task
         except asyncio.CancelledError:
             process.terminate()
             await process.wait()
+            stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
             raise
         return process.returncode or 0, stderr.decode("utf-8", errors="replace")
