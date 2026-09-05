@@ -22,6 +22,7 @@ from .models import (
 )
 from .providers.mock import MockProvider
 from .reference_manager import ReferenceManager, promote_accepted_scene_references
+from .scene_contracts import verify_scene_contract
 from .storage import ProjectStorage
 from .visual_qc import VisualQCAnalyzer
 
@@ -61,6 +62,8 @@ class RenderQueue:
         return (
             scene.status == "Accepted"
             and scene.acceptance.status == "Accepted"
+            and scene.ai_locked
+            and verify_scene_contract(scene)
             and bool(scene.result_file)
         )
 
@@ -125,6 +128,14 @@ class RenderQueue:
         if not worker_active:
             self._workers[project_id] = asyncio.create_task(self._run(project_id))
         return project
+
+    @staticmethod
+    def _contract_block_reason(scene: Scene) -> str:
+        if not scene.ai_locked:
+            return "Scene chưa được AI Continuity Lock"
+        if not verify_scene_contract(scene):
+            return "Scene Packet contract không còn khớp dữ liệu đã seal"
+        return ""
 
     def _dependency_blocker(self, project: Project, scene: Scene) -> Scene | None:
         if scene.visual_plan.dependency_mode != "direct" or scene.order <= 1:
@@ -260,6 +271,16 @@ class RenderQueue:
                     scene = next((item for item in project.scenes if item.id == scene_id), None)
                     if not scene:
                         continue
+                    contract_reason = self._contract_block_reason(scene)
+                    if contract_reason:
+                        scene.acceptance = ProductionAcceptance(
+                            status="Blocked",
+                            reasons=[contract_reason],
+                        )
+                        scene.warnings.append(f"Blocked: {contract_reason}")
+                        await self._update(project, scene, "Blocked", 0)
+                        continue
+
                     blocker = self._dependency_blocker(project, scene)
                     if blocker:
                         scene.acceptance = ProductionAcceptance(
