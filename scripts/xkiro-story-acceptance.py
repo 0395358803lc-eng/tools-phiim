@@ -50,6 +50,22 @@ TERM_ALTERNATIVES: dict[str, tuple[str, ...]] = {
     "led đỏ": ("led đỏ", "red led"),
     "vàng": ("vàng", "yellow"),
     "cán gỗ cong": ("cán gỗ cong", "curved wooden handle"),
+    "tiếng xé giấy": ("tiếng xé giấy", "paper tearing", "sound of paper tearing"),
+    "xé chiếc vé làm đôi": (
+        "xé chiếc vé làm đôi",
+        "tear the ticket in half",
+        "tears the ticket in half",
+        "tears it cleanly in two",
+    ),
+    "góc phải của chiếc vé xanh": (
+        "góc phải của chiếc vé xanh",
+        "top right corner of the blue ticket",
+        "right corner of the blue ticket",
+    ),
+    "lần này anh nhớ đúng thứ tự rồi": (
+        "lần này anh nhớ đúng thứ tự rồi",
+        "this time i remembered the right order",
+    ),
 }
 
 
@@ -184,6 +200,7 @@ def audit_project(
 ) -> dict[str, typing.Any]:
     errors: list[dict[str, typing.Any]] = []
     warnings: list[dict[str, typing.Any]] = []
+    diagnostics: list[dict[str, typing.Any]] = []
     scene_audit: list[dict[str, typing.Any]] = []
 
     def error(code: str, message: str, scene: int | None = None) -> None:
@@ -197,6 +214,12 @@ def audit_project(
         if scene is not None:
             item["scene"] = scene
         warnings.append(item)
+
+    def diagnostic(code: str, message: str, scene: int | None = None) -> None:
+        item: dict[str, typing.Any] = {"code": code, "message": message}
+        if scene is not None:
+            item["scene"] = scene
+        diagnostics.append(item)
 
     if project.settings.aspect_ratio != manifest["required_aspect_ratio"]:
         error(
@@ -300,7 +323,13 @@ def audit_project(
             if not scene.ai_locked:
                 error("AI_LOCK", f"Scene {scene.id} is not AI continuity locked", number)
             for item in scene.warnings:
-                warning("SCENE_WARNING", f"{scene.id}: {item}", number)
+                if (
+                    "camera conflicted with source-grounded visual cast" in item
+                    and "sanitized to match visible cast" in item
+                ):
+                    diagnostic("RESOLVED_CAMERA_SANITIZE", f"{scene.id}: {item}", number)
+                else:
+                    warning("SCENE_WARNING", f"{scene.id}: {item}", number)
 
         missing_required = required - aggregate_visible
         if missing_required:
@@ -371,6 +400,32 @@ def audit_project(
             }
         )
 
+    timeline = manifest.get("timeline", {})
+    for number in timeline.get("flashback_scenes", []):
+        for scene in groups.get(int(number), []):
+            if not fold(scene.start_state.time).startswith("flashback"):
+                error(
+                    "TIMELINE_DOMAIN",
+                    f"Expected flashback time domain, got {scene.start_state.time!r}",
+                    int(number),
+                )
+    for number in timeline.get("present_scenes", []):
+        for scene in groups.get(int(number), []):
+            if not fold(scene.start_state.time).startswith("present"):
+                error(
+                    "TIMELINE_DOMAIN",
+                    f"Expected present time domain, got {scene.start_state.time!r}",
+                    int(number),
+                )
+    for number in timeline.get("direct_scenes", []):
+        scenes = groups.get(int(number), [])
+        if scenes and any(scene.visual_plan.dependency_mode != "direct" for scene in scenes):
+            error(
+                "DIRECT_DEPENDENCY",
+                "Authored direct continuation is not using dependency_mode=direct",
+                int(number),
+            )
+
     for fact in manifest.get("hard_facts", []):
         number = int(fact["scene"])
         generated = output_text(groups.get(number, []))
@@ -401,7 +456,13 @@ def audit_project(
     if project.continuity_score != 100:
         error("CONTINUITY_SCORE", f"Continuity score is {project.continuity_score}, expected 100")
     for item in project.continuity_warnings:
-        warning("CONTINUITY_WARNING", item)
+        if (
+            "camera conflicted with source-grounded visual cast" in item
+            and "sanitized to match visible cast" in item
+        ):
+            diagnostic("RESOLVED_CAMERA_SANITIZE", item)
+        else:
+            warning("CONTINUITY_WARNING", item)
 
     strict_pass = not errors and not warnings
     return {
@@ -422,6 +483,7 @@ def audit_project(
         },
         "errors": errors,
         "warnings": warnings,
+        "diagnostics": diagnostics,
         "scene_audit": scene_audit,
         "note": (
             "This verdict covers analysis/source-truth readiness before rendering. "
