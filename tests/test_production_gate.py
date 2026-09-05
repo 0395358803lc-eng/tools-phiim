@@ -70,6 +70,21 @@ def test_unified_gate_rejects_low_component_even_with_high_aggregate_score() -> 
     assert any("action_consistency=10" in item for item in blockers)
 
 
+def test_acceptance_score_must_equal_strict_component_floor() -> None:
+    project, scene = _accepted_project()
+    scene.visual_qc.score = 98
+    scene.visual_qc.action_consistency = 91
+    scene.quality.score = 95
+
+    assert _gate().scene_production_score_floor(scene) == 91
+
+    blockers = _gate().scene_production_blockers(project, scene)
+    assert any("strict component floor" in item for item in blockers)
+
+    scene.acceptance.score = 91
+    assert _gate().scene_production_blockers(project, scene) == []
+
+
 def test_unified_gate_requires_direct_continuity_evidence() -> None:
     project, scene = _accepted_project()
     scene.visual_plan.dependency_mode = "direct"
