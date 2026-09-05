@@ -1,4 +1,4 @@
-import flow_story_studio.production_gate as production_gate
+from flow_story_studio import production_gate
 from flow_story_studio.engines.analyzer import analyze_story
 from flow_story_studio.models import (
     AnalyzeRequest,
