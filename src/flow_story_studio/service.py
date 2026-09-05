@@ -104,6 +104,21 @@ def _invalidate_changed_contract_evidence(
             invalidate_scene_contract(scene)
 
 
+IN_FLIGHT_SCENE_STATUSES = {"Preparing", "Generating", "QC"}
+
+
+def _ensure_project_not_rendering(project: Project, operation: str) -> None:
+    active = [
+        scene.id
+        for scene in project.scenes
+        if scene.status in IN_FLIGHT_SCENE_STATUSES
+    ]
+    if active:
+        raise PermissionError(
+            f"Không thể {operation} khi render đang chạy: " + ", ".join(active)
+        )
+
+
 class StudioService:
     def __init__(self, storage: ProjectStorage) -> None:
         self.storage = storage
@@ -132,6 +147,11 @@ class StudioService:
             raise KeyError(project_id)
         return project
 
+    def get_idle_project(self, project_id: str, operation: str) -> Project:
+        project = self.get_required(project_id)
+        _ensure_project_not_rendering(project, operation)
+        return project
+
     def update_scene(self, project_id: str, scene_id: str, patch: SceneUpdate) -> Project:
         project = self.get_required(project_id)
         previous_contracts = _contract_signatures(project)
@@ -143,6 +163,8 @@ class StudioService:
         scene = project.scenes[scene_index]
         changes = patch.model_dump(exclude_none=True)
         protected = set(changes) - {"selected", "reference_image"}
+        if protected:
+            _ensure_project_not_rendering(project, "chỉnh sửa semantic scene")
         if scene.ai_locked and protected:
             raise PermissionError(
                 "Scene đang được AI Continuity Lock bảo vệ; hãy mở khóa trước khi chỉnh sửa"
@@ -222,7 +244,7 @@ class StudioService:
         return self.storage.save(project)
 
     def reorder(self, project_id: str, request: ReorderRequest) -> Project:
-        project = self.get_required(project_id)
+        project = self.get_idle_project(project_id, "đổi thứ tự scene")
         previous_contracts = _contract_signatures(project)
         current = {scene.id: scene for scene in project.scenes}
         requested = request.scene_ids
@@ -246,7 +268,7 @@ class StudioService:
         return self.storage.save(project)
 
     def check_continuity(self, project_id: str, auto_fix: bool | None = None) -> Project:
-        project = self.get_required(project_id)
+        project = self.get_idle_project(project_id, "chạy lại Continuity")
         previous_contracts = _contract_signatures(project)
         use_auto_fix = project.settings.auto_continuity if auto_fix is None else auto_fix
         project = check_project(project, auto_fix=use_auto_fix)
