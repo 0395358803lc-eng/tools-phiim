@@ -1,3 +1,4 @@
+import flow_story_studio.production_gate as production_gate
 from flow_story_studio.engines.analyzer import analyze_story
 from flow_story_studio.models import (
     AnalyzeRequest,
@@ -5,10 +6,6 @@ from flow_story_studio.models import (
     ProductionAcceptance,
     QualityReport,
     VisualQCReport,
-)
-from flow_story_studio.production_gate import (
-    is_scene_production_ready,
-    scene_production_blockers,
 )
 
 
@@ -44,18 +41,18 @@ def _accepted_project():
 def test_unified_gate_accepts_complete_mock_evidence() -> None:
     project, scene = _accepted_project()
 
-    assert scene_production_blockers(project, scene) == []
-    assert is_scene_production_ready(project, scene)
+    assert production_gate.scene_production_blockers(project, scene) == []
+    assert production_gate.is_scene_production_ready(project, scene)
 
 
 def test_unified_gate_rejects_mutable_accepted_flag_when_visual_qc_failed() -> None:
     project, scene = _accepted_project()
     scene.visual_qc.status = "Failed"
 
-    blockers = scene_production_blockers(project, scene)
+    blockers = production_gate.scene_production_blockers(project, scene)
 
     assert any("visual QC" in item for item in blockers)
-    assert not is_scene_production_ready(project, scene)
+    assert not production_gate.is_scene_production_ready(project, scene)
 
 
 def test_unified_gate_rejects_low_component_even_with_high_aggregate_score() -> None:
@@ -63,7 +60,7 @@ def test_unified_gate_rejects_low_component_even_with_high_aggregate_score() -> 
     scene.visual_qc.score = 99
     scene.visual_qc.action_consistency = 10
 
-    blockers = scene_production_blockers(project, scene)
+    blockers = production_gate.scene_production_blockers(project, scene)
 
     assert any("action_consistency=10" in item for item in blockers)
 
@@ -73,7 +70,7 @@ def test_unified_gate_requires_direct_continuity_evidence() -> None:
     scene.visual_plan.dependency_mode = "direct"
     scene.continuity_qc = ContinuityQCReport(status="NotApplicable", score=100)
 
-    blockers = scene_production_blockers(project, scene)
+    blockers = production_gate.scene_production_blockers(project, scene)
 
     assert any("direct continuity QC" in item for item in blockers)
 
@@ -83,6 +80,6 @@ def test_google_flow_gate_requires_visual_boundary_evidence() -> None:
     project.settings.provider = "google-flow"
     scene.visual_qc.model_id = "vision-model"
 
-    blockers = scene_production_blockers(project, scene)
+    blockers = production_gate.scene_production_blockers(project, scene)
 
     assert any("boundary evidence" in item for item in blockers)
