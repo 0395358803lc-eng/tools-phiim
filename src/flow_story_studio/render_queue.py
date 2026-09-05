@@ -345,6 +345,7 @@ class RenderQueue:
                         if (
                             next_scene
                             and next_scene.visual_plan.dependency_mode == "direct"
+                            and next_scene.visual_plan.inherit_previous_frame
                             and is_direct_continuation(scene, next_scene)
                         ):
                             next_scene.reference_image = scene.visual_qc.last_frame
