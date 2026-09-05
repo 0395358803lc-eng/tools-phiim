@@ -40,6 +40,26 @@ def _issues(values: object) -> list[VisualIssue]:
     return result
 
 
+def _component_failures(
+    values: dict[str, int],
+    threshold: int,
+    *,
+    prefix: str,
+) -> list[VisualIssue]:
+    failures: list[VisualIssue] = []
+    for name, score in values.items():
+        if score >= threshold:
+            continue
+        failures.append(
+            VisualIssue(
+                code=f"{prefix}_{name.upper()}_BELOW_THRESHOLD"[:100],
+                severity="error",
+                message=f"{name} scored {score}, below required {threshold}.",
+            )
+        )
+    return failures
+
+
 def _data_path(data_root: Path, relative: str) -> Path | None:
     if not relative:
         return None
@@ -130,7 +150,8 @@ Judge only what is visually observable. Detect wrong identity, wrong location, w
 wardrobe drift, lighting/time drift, extra characters or major composition violations.
 Return exactly one JSON object with integer scores 0-100: character_identity,
 location_identity, prop_consistency, wardrobe_consistency, lighting_consistency,
-composition_consistency, score, and issues. issues is an array of objects with code,
+action_consistency, composition_consistency, score, and issues.
+issues is an array of objects with code,
 severity ('warning' or 'error'), message. score must reflect production acceptability.
 """
         try:
@@ -151,13 +172,19 @@ severity ('warning' or 'error'), message. score must reflect production acceptab
             "prop_consistency": _bounded(data.get("prop_consistency"), 100 if not prop_ids else 0),
             "wardrobe_consistency": _bounded(data.get("wardrobe_consistency"), 100),
             "lighting_consistency": _bounded(data.get("lighting_consistency")),
+            "action_consistency": _bounded(data.get("action_consistency")),
             "composition_consistency": _bounded(data.get("composition_consistency")),
         }
         score = _bounded(data.get("score"), round(sum(values.values()) / len(values)))
         issues = _issues(data.get("issues"))
-        passed = score >= project.settings.quality_threshold and not any(
-            issue.severity == "error" for issue in issues
+        issues.extend(
+            _component_failures(
+                values,
+                project.settings.quality_threshold,
+                prefix="VISUAL",
+            )
         )
+        passed = not any(issue.severity == "error" for issue in issues)
         return VisualQCReport(
             status="Passed" if passed else "Failed",
             score=score,
@@ -245,9 +272,14 @@ lighting_match, screen_direction_match, score, and issues. issues uses code/seve
         }
         score = _bounded(data.get("score"), round(sum(values.values()) / len(values)))
         issues = _issues(data.get("issues"))
-        passed = score >= project.settings.quality_threshold and not any(
-            issue.severity == "error" for issue in issues
+        issues.extend(
+            _component_failures(
+                values,
+                project.settings.quality_threshold,
+                prefix="CONTINUITY",
+            )
         )
+        passed = not any(issue.severity == "error" for issue in issues)
         return ContinuityQCReport(
             status="Passed" if passed else "Failed",
             score=score,

@@ -50,6 +50,7 @@ async def test_scene_visual_qc_passes_with_observed_frames(tmp_path):
             "prop_consistency": 92,
             "wardrobe_consistency": 95,
             "lighting_consistency": 91,
+            "action_consistency": 92,
             "composition_consistency": 90,
             "score": 93,
             "issues": [],
@@ -136,3 +137,57 @@ async def test_continuity_qc_is_not_applicable_without_direct_link(tmp_path, mon
 
     assert report.status == "NotApplicable"
     assert report.score == 100
+
+async def test_scene_visual_qc_rejects_low_component_despite_high_overall_score(tmp_path):
+    project, scene = make_project(tmp_path)
+    vision = FakeVision(
+        {
+            "character_identity": 98,
+            "location_identity": 98,
+            "prop_consistency": 60,
+            "wardrobe_consistency": 98,
+            "lighting_consistency": 98,
+            "action_consistency": 62,
+            "composition_consistency": 98,
+            "score": 96,
+            "issues": [],
+        }
+    )
+    analyzer = VisualQCAnalyzer(tmp_path, vision)
+
+    report = await analyzer.inspect_scene(project, scene)
+
+    assert report.status == "Failed"
+    assert report.score == 96
+    codes = {issue.code for issue in report.issues}
+    assert "VISUAL_PROP_CONSISTENCY_BELOW_THRESHOLD" in codes
+    assert "VISUAL_ACTION_CONSISTENCY_BELOW_THRESHOLD" in codes
+
+
+async def test_continuity_qc_rejects_low_component_despite_high_overall_score(
+    tmp_path, monkeypatch
+):
+    project, scene = make_project(tmp_path)
+    monkeypatch.setattr(visual_qc_module, "is_direct_continuation", lambda *_args: True)
+    vision = FakeVision(
+        {
+            "character_match": 98,
+            "location_match": 98,
+            "wardrobe_match": 98,
+            "prop_state_match": 55,
+            "lighting_match": 98,
+            "screen_direction_match": 98,
+            "score": 95,
+            "issues": [],
+        }
+    )
+    analyzer = VisualQCAnalyzer(tmp_path, vision)
+
+    report = await analyzer.inspect_continuity(project, scene, scene)
+
+    assert report.status == "Failed"
+    assert report.score == 95
+    assert any(
+        issue.code == "CONTINUITY_PROP_STATE_MATCH_BELOW_THRESHOLD"
+        for issue in report.issues
+    )

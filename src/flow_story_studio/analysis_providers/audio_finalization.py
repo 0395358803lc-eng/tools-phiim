@@ -19,6 +19,7 @@ class AudioEvent:
     speaker_id: str | None
     text: str
     kind: str  # dialogue | voiceover
+    delivery: str = "onscreen"
 
 
 def _fold(value: str) -> str:
@@ -48,7 +49,7 @@ def _character_from_label(label: str, characters: list[Character]) -> Character 
     # Remove channel/voice descriptors but preserve the actual character identity.
     folded = re.sub(
         r"\b(?:giong|voice|trong may ghi am|qua dien thoai|through the phone|"
-        r"over the phone|on the phone|v o|o s|recorded)\b",
+        r"over the phone|on the phone|v o|o s|off screen|offscreen|recorded)\b",
         " ",
         folded,
     )
@@ -67,6 +68,23 @@ def _character_from_label(label: str, characters: list[Character]) -> Character 
                 best = character
                 best_score = score
     return best
+
+
+def _delivery_from_label(label: str) -> str:
+    folded = _fold(label)
+    if any(
+        marker in folded
+        for marker in ("may ghi am", "recorder", "recorded", "ban ghi", "recording")
+    ):
+        return "recorded"
+    if any(
+        marker in folded
+        for marker in ("dien thoai", "phone", "telephone", "cuoc goi", "call")
+    ):
+        return "phone"
+    if any(marker in folded for marker in ("o s", "off screen", "offscreen", "voice only")):
+        return "offscreen"
+    return "onscreen"
 
 
 def _is_voiceover_label(label: str) -> bool:
@@ -156,6 +174,7 @@ def parse_screenplay_audio(original_text: str, characters: list[Character]) -> l
                     speaker_id=speaker.id if speaker is not None else None,
                     text=text,
                     kind=kind,
+                    delivery=_delivery_from_label(line),
                 )
             )
         index = max(cursor, index + 1)
@@ -195,6 +214,7 @@ def finalize_audio(project: Project, source_project: Project | None = None) -> P
                     character_id=event.speaker_id,
                     text=event.text,
                     emotion="Theo ngữ cảnh kịch bản gốc",
+                    delivery=event.delivery,
                 )
             )
         scene.dialogues = dialogues

@@ -91,6 +91,7 @@ async def test_inspect_scene_scores_real_frame_files_without_ffmpeg(tmp_path: Pa
             "prop_consistency": 94,
             "wardrobe_consistency": 93,
             "lighting_consistency": 92,
+            "action_consistency": 91,
             "composition_consistency": 91,
             "score": 94,
             "issues": [{"code": "MINOR", "severity": "warning", "message": "minor"}],
