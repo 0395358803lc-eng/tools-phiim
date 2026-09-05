@@ -400,7 +400,7 @@ def test_explicit_rerender_does_not_recover_stale_upstream_job(tmp_path: Path) -
     queue = RenderQueue(storage, CaptureFlow())  # type: ignore[arg-type]
 
     async def run() -> None:
-        await queue.enqueue(project.id, [scene.id])
+        await queue.enqueue(project.id, [scene.id], force_rerender=True)
         await queue._queues[project.id].join()
         await queue.shutdown()
 
