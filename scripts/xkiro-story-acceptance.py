@@ -72,34 +72,24 @@ def scene_number(source_text: str) -> int | None:
 
 
 def select_minimax_27_free(models: list[typing.Any]) -> typing.Any:
-    candidates = []
-    for model in models:
-        raw = f"{model.id} {model.display_name}".casefold()
-        if model.access_tier != "free":
-            continue
-        if "minimax" not in raw:
-            continue
-        if not re.search(r"2[.\-_ ]?7", raw):
-            continue
-        candidates.append(model)
-    if not candidates:
-        available = [
-            f"{model.id} | {model.display_name} | {model.access_tier}"
-            for model in models
-            if model.access_tier == "free"
-        ]
-        raise RuntimeError(
-            "Không tìm thấy MiniMax 2.7 Free trong catalog xKiro. "
-            "Free models: " + "; ".join(available[:50])
-        )
-    candidates.sort(
-        key=lambda item: (
-            "free" not in item.display_name.casefold(),
-            len(item.display_name),
-            item.id,
-        )
+    exact_id = "minimax/minimax-m2.7:free"
+    exact = next((model for model in models if model.id == exact_id), None)
+    if exact is not None:
+        if exact.access_tier != "free":
+            raise RuntimeError(
+                f"{exact_id} exists but access_tier={exact.access_tier!r}, expected 'free'"
+            )
+        return exact
+
+    available = [
+        f"{model.id} | {model.display_name} | {model.access_tier}"
+        for model in models
+        if model.access_tier == "free"
+    ]
+    raise RuntimeError(
+        f"Không tìm thấy model bắt buộc {exact_id} trong catalog xKiro. "
+        "Free models: " + "; ".join(available[:50])
     )
-    return candidates[0]
 
 
 def find_character(project: Project, expected_name: str) -> typing.Any | None:
