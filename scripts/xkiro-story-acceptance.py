@@ -602,7 +602,7 @@ def audit_project(
         "scene_audit": scene_audit,
         "note": (
             "This verdict covers final analysis/source-truth readiness before rendering. "
-            "Provider fallback scenes are reported separately and do not fail production acceptance "
+            "Provider fallback scenes are reported separately and do not fail "\n            "production acceptance "
             "when the deterministic final state passes every source-truth gate. Rendered pixels, "
             "voices, timing and final MP4 continuity still require live video QC."
         ),
