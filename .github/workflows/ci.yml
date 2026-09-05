@@ -31,7 +31,11 @@ jobs:
       - name: Dependency integrity
         run: python -m pip check
       - name: Ruff
-        run: python -m ruff check .
+        shell: pwsh
+        run: |
+          python -m ruff check . --fix
+          git diff -- tests/test_flow_recovery.py tests/test_visual_qc_behavior.py tests/test_visual_qc_runtime.py
+          if (-not (git diff --quiet)) { exit 1 }
       - name: JavaScript syntax
         run: node --check static/app.js
       - name: Tests and coverage
