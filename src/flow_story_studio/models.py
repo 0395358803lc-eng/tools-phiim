@@ -95,6 +95,7 @@ class Dialogue(StrictModel):
     character_id: str
     text: str
     emotion: str = "Tự nhiên, đúng ngữ cảnh"
+    delivery: Literal["onscreen", "offscreen", "phone", "recorded"] = "onscreen"
 
 
 class ContinuityState(StrictModel):
