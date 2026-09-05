@@ -22,6 +22,15 @@ from .flow_helpers import (
     select_video_candidate,
 )
 from .flow_media import extract_last_frame, ffmpeg_path
+from .flow_ui_contract import (
+    DEFAULT_FLOW_VIDEO_MODEL,
+    DEFAULT_FLOW_VIDEO_MODEL_LABEL,
+    FlowUIContractError,
+    assert_safe_video_model,
+    choose_model_candidate,
+    model_aliases,
+    model_matches_contract,
+)
 from .models import FlowConnection, FlowVideoModel, Project, Scene
 from .providers.base import RenderResult
 
@@ -29,9 +38,9 @@ logger = logging.getLogger(__name__)
 
 VIDEO_MODELS = [
     FlowVideoModel(
-        id="veo-3.1-lite-lower-priority",
-        display_name="Veo 3.1 Lite · Lower priority",
-        note="Tiết kiệm credit, hàng đợi có thể lâu hơn",
+        id=DEFAULT_FLOW_VIDEO_MODEL,
+        display_name=DEFAULT_FLOW_VIDEO_MODEL_LABEL,
+        note="Mặc định an toàn: Lower Priority; không fallback sang model tốn credits",
     ),
     FlowVideoModel(id="veo-3.1-fast", display_name="Veo 3.1 Fast", note="Nhanh"),
     FlowVideoModel(id="veo-3.1", display_name="Veo 3.1 Quality", note="Chất lượng cao"),
@@ -256,6 +265,10 @@ class FlowCLIIntegration:
         """Teach Flow CLI 0.6.0 how the current Radix tab controls expose selection."""
         import flow_cli._flow_ui as flow_ui
 
+        flow_ui.VIDEO_MODEL_UI_LABELS[DEFAULT_FLOW_VIDEO_MODEL] = list(
+            model_aliases(DEFAULT_FLOW_VIDEO_MODEL)
+        )
+
         current = tuple(flow_ui.SELECTED_OPTION_TEMPLATES)
         additions = (
             '[role="tab"][aria-selected="true"]:has-text("{label}")',
@@ -271,6 +284,8 @@ class FlowCLIIntegration:
                 # Material Symbols are rendered as text inside the current
                 # model trigger and are not part of the selected model's name.
                 cleaned = selected.replace("arrow_drop_down", "").strip()
+                if requested.strip().casefold().replace(" ", "-") == DEFAULT_FLOW_VIDEO_MODEL:
+                    return model_matches_contract(requested, cleaned)
                 return original_verify_model(ui, requested, cleaned)
 
             verify_model_selection._studio_compat = True  # type: ignore[attr-defined]
@@ -367,10 +382,32 @@ class FlowCLIIntegration:
             )
             candidates = list(mapping.get(normalized, [model]))
             current = (await picker.inner_text(timeout=500)).replace("arrow_drop_down", "").strip()
-            if any(flow_ui.model_matches(model, candidate) for candidate in [current]):
+            if model_matches_contract(model, current):
                 return True
             await picker.click(timeout=1500)
             await ui.page.wait_for_timeout(300)
+            if normalized == DEFAULT_FLOW_VIDEO_MODEL:
+                options = ui.page.locator(
+                    '[role="menuitem"]:visible, [role="menuitemradio"]:visible, '
+                    '[role="option"]:visible, [role="radio"]:visible, button:visible'
+                )
+                labels = await options.all_inner_texts()
+                try:
+                    selected = choose_model_candidate(model, labels)
+                except FlowUIContractError as exc:
+                    await ui.page.keyboard.press("Escape")
+                    raise RuntimeError(str(exc)) from exc
+                option = options.nth(selected.index)
+                await option.click(timeout=1500)
+                await ui.page.wait_for_timeout(300)
+                updated = (await picker.inner_text(timeout=500)).replace(
+                    "arrow_drop_down", ""
+                ).strip()
+                if not model_matches_contract(model, updated):
+                    raise RuntimeError(
+                        f"Requested zero-credit model {model!r}, but Flow selected {updated!r}"
+                    )
+                return True
             for candidate in candidates:
                 option = ui.page.locator(f'[role="menuitem"]:has-text("{candidate}")').first
                 try:
@@ -631,6 +668,26 @@ class FlowCLIIntegration:
                         break
                 except Exception:  # nosec B112
                     continue
+
+            if normalized == DEFAULT_FLOW_VIDEO_MODEL:
+                options = ui.page.locator(
+                    '[role="menuitem"]:visible, [role="menuitemradio"]:visible, '
+                    '[role="option"]:visible, [role="radio"]:visible, button:visible'
+                )
+                labels = await options.all_inner_texts()
+                try:
+                    selected = choose_model_candidate(model, labels)
+                except FlowUIContractError as exc:
+                    await ui.page.keyboard.press("Escape")
+                    raise RuntimeError(str(exc)) from exc
+                await options.nth(selected.index).click(timeout=1500)
+                await ui.page.wait_for_timeout(400)
+                selected_label = await ui.get_selected_model()
+                if not model_matches_contract(model, selected_label):
+                    raise RuntimeError(
+                        "Flow model selector changed after click; refusing generation."
+                    )
+                return
 
             templates = tuple(
                 dict.fromkeys(flow_ui.IMAGE_MODEL_OPTION_TEMPLATES + flow_ui.MODEL_OPTION_TEMPLATES)
@@ -1016,12 +1073,20 @@ class FlowCLIIntegration:
         if checkpoint:
             checkpoint(project, scene)
         duration = scene.duration if scene.duration in {4, 6, 8} else 8
+        allow_paid = os.getenv("FLOW_ALLOW_PAID_VIDEO_MODELS", "").strip() == "1"
+        try:
+            safe_video_model = assert_safe_video_model(
+                project.settings.video_model,
+                allow_paid=allow_paid,
+            )
+        except FlowUIContractError as exc:
+            raise FlowIntegrationError(str(exc)) from exc
         try:
             job = await self._generate_video(
                 client,
                 prompt=self._prompt(scene),
                 aspect=project.settings.aspect_ratio,
-                model=project.settings.video_model,
+                model=safe_video_model,
                 duration=duration,
                 image_path=self._reference_path(scene.reference_image),
                 timeout=self.timeout,

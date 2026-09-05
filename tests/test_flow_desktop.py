@@ -158,7 +158,7 @@ def test_embedded_flow_generation_contract(tmp_path: Path, monkeypatch: object) 
         AnalyzeRequest(
             name="Embedded Flow",
             original_text=TEXT,
-            settings=VideoSettings(provider="google-flow", video_model="veo-3.1-fast"),
+            settings=VideoSettings(provider="google-flow"),
         )
     )
     integration = FlowCLIIntegration(tmp_path)
@@ -198,7 +198,7 @@ def test_embedded_flow_generation_contract(tmp_path: Path, monkeypatch: object) 
             ),
         )
     )
-    assert captured["model"] == "veo-3.1-fast"
+    assert captured["model"] == "veo-3.1-lite-lower-priority"
     assert captured["headless"] is True
     assert result.upstream_project_id == "upstream-project"
     assert result.result_file.endswith("result.mp4")
