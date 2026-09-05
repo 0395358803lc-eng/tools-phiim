@@ -180,7 +180,10 @@ def canonical_audio(project: Project, scenes: list[typing.Any]) -> list[tuple[st
 
 def prop_ids_for_scene(scene: typing.Any) -> set[str]:
     values = set(scene.start_state.prop_positions) | set(scene.end_state.prop_positions)
-    values.update(scene.visual_plan.prop_reference_ids)
+    values.update(
+        reference_id.removeprefix("VIS-")
+        for reference_id in scene.visual_plan.prop_reference_ids
+    )
     return values
 
 
