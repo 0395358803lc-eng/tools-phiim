@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from ..engines.continuity import check_project
+from ..engines.continuity import check_project, is_direct_continuation
 from ..engines.prompt_generator import make_flow_prompt, make_visual_prompt
 from ..models import Character, ContinuityState, Location, Project, Prop
 from ..visual_bible import build_visual_bible
