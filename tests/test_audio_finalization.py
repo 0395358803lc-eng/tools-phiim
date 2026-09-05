@@ -60,17 +60,20 @@ def test_parse_screenplay_audio_classifies_spoken_channels_without_quotes() -> N
         )
     )
     events = parse_screenplay_audio(project.original_text, project.characters)
-    spoken = [(event.scene_number, event.speaker_id, event.text, event.kind) for event in events]
+    spoken = [
+        (event.scene_number, event.speaker_id, event.text, event.kind, event.delivery)
+        for event in events
+    ]
 
     alex = next(item for item in project.characters if item.name.casefold() == "alex")
     maya = next(item for item in project.characters if item.name.casefold() == "maya")
 
-    assert (1, alex.id, "I am here.", "dialogue") in spoken
-    assert (1, maya.id, "Do not leave.", "dialogue") in spoken
-    assert (2, alex.id, "If I hear this, I forgot again.", "dialogue") in spoken
-    assert (2, maya.id, "Do not board the train.", "dialogue") in spoken
-    assert (3, alex.id, "I remember now.", "dialogue") in spoken
-    assert (3, maya.id, "Then stay there.", "dialogue") in spoken
+    assert (1, alex.id, "I am here.", "dialogue", "onscreen") in spoken
+    assert (1, maya.id, "Do not leave.", "dialogue", "phone") in spoken
+    assert (2, alex.id, "If I hear this, I forgot again.", "dialogue", "recorded") in spoken
+    assert (2, maya.id, "Do not board the train.", "dialogue", "recorded") in spoken
+    assert (3, alex.id, "I remember now.", "dialogue", "onscreen") in spoken
+    assert (3, maya.id, "Then stay there.", "dialogue", "onscreen") in spoken
     assert any(
         event.kind == "voiceover" and event.text == "The lights finally go out." for event in events
     )
@@ -111,6 +114,8 @@ def test_finalize_audio_overwrites_ai_hallucinations_and_preserves_source_speake
         (alex.id, "If I hear this, I forgot again."),
         (maya.id, "Do not board the train."),
     ]
+    assert [item.delivery for item in scene1.dialogues] == ["onscreen", "phone"]
+    assert [item.delivery for item in scene2.dialogues] == ["recorded", "recorded"]
     assert [(item.character_id, item.text) for item in scene3.dialogues] == [
         (alex.id, "I remember now."),
         (maya.id, "Then stay there."),
@@ -157,3 +162,19 @@ Em đang ở đâu?
         "Anh đừng đến nhà ga tối nay.",
         "Em đang ở đâu?",
     ]
+
+def test_flow_prompt_contains_explicit_source_grounded_delivery_channels() -> None:
+    project = analyze_story(
+        AnalyzeRequest(
+            name="audio delivery prompt",
+            original_text=_script(),
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    scene1 = next(scene for scene in project.scenes if "SCENE 1" in scene.source_text)
+    scene2 = next(scene for scene in project.scenes if "SCENE 2" in scene.source_text)
+
+    assert "[delivery: phone;" in scene1.flow_prompt
+    assert "[delivery: recorded;" in scene2.flow_prompt
+    assert 'MAYA: "Do not leave."' in scene1.flow_prompt
+    assert 'ALEX: "If I hear this, I forgot again."' in scene2.flow_prompt
