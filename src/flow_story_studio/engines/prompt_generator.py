@@ -131,6 +131,13 @@ Lighting:
 Environment:
 {scene.atmosphere}
 
+SOURCE TRUTH — VERBATIM:
+{scene.source_text}
+Preserve every explicit clock value, on-screen label/message, prop condition, sound cue and
+causal action from the source beat above. Do not translate or paraphrase authored on-screen text.
+Stage directions and SFX are not spoken dialogue unless the screenplay explicitly makes them
+spoken.
+
 AUDIO / DIALOGUE LOCK:
 {audio_text}
 Use the exact source-grounded speaker and words above. Do not paraphrase, invent narration,

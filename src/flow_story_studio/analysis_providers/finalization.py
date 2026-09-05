@@ -149,20 +149,31 @@ def _scene_context(scene) -> str:
     return _key(match.group(1) if match else "")
 
 
-def _source_time_label(scene, previous_scene) -> str:
-    context = _scene_context(scene)
-    if ("lien tuc" in context or "continuous" in context) and previous_scene is not None:
-        previous_context = _scene_context(previous_scene)
-        previous_flashback = "flashback" in previous_context
-        current_flashback = "flashback" in context
-        same_location = previous_scene.location_id == scene.location_id
-        same_timeline = previous_flashback == current_flashback
-        if same_location and same_timeline:
-            return previous_scene.end_state.time
+def _source_clock_anchor(scene) -> str:
+    """Extract an authored watch/clock time, never a ticket/departure time."""
+    source = scene.source_text
+    patterns = (
+        r"(?:đồng\s+hồ|dong\s+ho|watch|clock).{0,90}?(\d{1,2}:\d{2})",
+        r"(\d{1,2}:\d{2}).{0,90}?(?:đồng\s+hồ|dong\s+ho|watch|clock)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1)
+    return ""
 
-    flashback = "flashback" in context
-    parallel = "song song" in context or "parallel" in context
-    daypart = ""
+
+def _time_domain(scene) -> str:
+    context = _scene_context(scene)
+    if "flashback" in context:
+        return "Flashback"
+    if "song song" in context or "parallel" in context:
+        return "Present parallel"
+    return "Present"
+
+
+def _source_daypart(scene) -> str:
+    context = _scene_context(scene)
     for marker, label in (
         ("binh minh", "dawn"),
         ("sang", "morning"),
@@ -179,23 +190,41 @@ def _source_time_label(scene, previous_scene) -> str:
         ("dusk", "dusk"),
     ):
         if marker in context:
-            daypart = label
-            break
-
-    if flashback:
-        return f"Flashback — {daypart or 'source-defined time'}"
-    if parallel:
-        return f"Present parallel — {daypart or 'source-defined time'}"
-    return f"Present — {daypart or 'source-defined time'}"
+            return label
+    return "source-defined time"
 
 
 def _normalize_source_timeline(project: Project) -> Project:
+    """Replace AI clock guesses with screenplay domains and explicit authored clock anchors."""
+    last_domain_time: dict[str, str] = {}
     previous_scene = None
+
     for scene in project.scenes:
-        label = _source_time_label(scene, previous_scene)
-        scene.start_state.time = label
-        scene.end_state.time = label
+        domain = _time_domain(scene)
+        direct = previous_scene is not None and is_direct_continuation(previous_scene, scene)
+        clock = _source_clock_anchor(scene)
+        daypart = _source_daypart(scene)
+
+        if direct:
+            start_label = previous_scene.end_state.time
+        else:
+            start_label = last_domain_time.get(domain, f"{domain} — {daypart}")
+
+        if clock:
+            clock_label = f"{domain} — {clock}"
+            if direct:
+                end_label = clock_label
+            else:
+                start_label = clock_label
+                end_label = clock_label
+        else:
+            end_label = start_label
+
+        scene.start_state.time = start_label
+        scene.end_state.time = end_label
+        last_domain_time[domain] = end_label
         previous_scene = scene
+
     return project
 
 

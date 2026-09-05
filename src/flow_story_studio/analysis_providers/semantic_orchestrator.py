@@ -468,23 +468,69 @@ def mentioned_props(scene: Scene, props: list[Prop]) -> set[str]:
     }
 
 
+def _prop_transformed_state(scene: Scene, prop: Prop) -> str | None:
+    """Return a source-grounded physical transformation without deleting the prop."""
+    source = semantic_key(_physical_source_text(scene))
+    aliases = [
+        semantic_key(alias) for alias in _prop_identity_alias(prop.name) if semantic_key(alias)
+    ]
+    for alias in aliases:
+        tear_patterns = (
+            rf"\bxe\b.{{0,18}}\b{re.escape(alias)}\b.{{0,24}}"
+            rf"\b(?:lam\s+doi|thanh\s+hai)\b",
+            rf"\b{re.escape(alias)}\b.{{0,18}}\bxe\b.{{0,24}}"
+            rf"\b(?:lam\s+doi|thanh\s+hai)\b",
+            rf"\b(?:tear|tears|rip|rips)\b.{{0,24}}\b(?:the\s+)?"
+            rf"{re.escape(alias)}\b.{{0,16}}\b(?:in\s+half|in\s+two|apart)\b",
+            rf"\b{re.escape(alias)}\b.{{0,18}}"
+            rf"\b(?:torn\s+in\s+half|ripped\s+in\s+two)\b",
+        )
+        if any(re.search(pattern, source) for pattern in tear_patterns):
+            return (
+                f"Source transformation: {prop.name} is torn into two physical pieces; "
+                "preserve the resulting fragments until the screenplay explicitly moves, "
+                "discards, or destroys them"
+            )
+    return None
+
+
 def _prop_removed_by_action(scene: Scene, prop: Prop) -> bool:
+    """Remove a prop only when the source explicitly disposes of or destroys it."""
     source = semantic_key(_physical_source_text(scene))
     aliases = [
         semantic_key(alias) for alias in _prop_identity_alias(prop.name) if semantic_key(alias)
     ]
     for alias in aliases:
         patterns = (
-            rf"\bxe\b.{{0,18}}\b{re.escape(alias)}\b.{{0,18}}\b(?:lam\s+doi|thanh\s+hai|nat|vun)\b",
-            rf"\b{re.escape(alias)}\b.{{0,18}}\bxe\b.{{0,18}}\b(?:lam\s+doi|thanh\s+hai|nat|vun)\b",
             rf"\b(?:vut|nem)\b.{{0,18}}\b{re.escape(alias)}\b.{{0,12}}\b(?:di|bo)\b",
             rf"\b(?:bo\s+lai|pha\s+huy|huy|dot)\b.{{0,18}}\b{re.escape(alias)}\b",
-            rf"\b(?:throw\s+away|discard|destroy|burn|tear|tears|rip|rips)\b.{{0,24}}\b(?:the\s+)?{re.escape(alias)}\b.{{0,16}}\b(?:in\s+half|apart|up)?\b",
-            rf"\b{re.escape(alias)}\b.{{0,18}}\b(?:torn\s+in\s+half|ripped\s+apart|destroyed|discarded|burned)\b",
+            rf"\b(?:throw\s+away|discard|destroy|burn)\b.{{0,24}}"
+            rf"\b(?:the\s+)?{re.escape(alias)}\b",
+            rf"\b{re.escape(alias)}\b.{{0,18}}"
+            rf"\b(?:destroyed|discarded|burned|thrown\s+away)\b",
         )
         if any(re.search(pattern, source) for pattern in patterns):
             return True
     return False
+
+
+def _prop_source_state(scene: Scene, prop: Prop) -> str:
+    """Describe the physical state using the authored beat before generic fallback text."""
+    source = semantic_key(_physical_source_text(scene))
+    name_key = semantic_key(prop.name)
+    if (
+        ("goc phai" in source or "right corner" in source)
+        and ("ve" in source or "ticket" in source)
+        and ("ve" in name_key or "ticket" in name_key)
+    ):
+        return (
+            f"Source state: right-corner fragment of {prop.name} is physically present; "
+            "do not restore the complete ticket"
+        )
+    transformed = _prop_transformed_state(scene, prop)
+    if transformed:
+        return transformed
+    return f"Present in source beat: {prop.name}; canonical source state: {prop.state}"
 
 
 def safe_prop_states(
@@ -501,10 +547,17 @@ def safe_prop_states(
     if direct_continuation:
         start_state.update({key: value for key, value in previous_props.items() if key in by_id})
     for prop_id in present:
-        start_state[prop_id] = f"Present in source beat: {by_id[prop_id].name}"
+        start_state[prop_id] = _prop_source_state(scene, by_id[prop_id])
+
     end_state = dict(start_state)
     for prop_id, prop in by_id.items():
-        if prop_id in end_state and _prop_removed_by_action(scene, prop):
+        if prop_id not in end_state:
+            continue
+        transformed = _prop_transformed_state(scene, prop)
+        if transformed:
+            end_state[prop_id] = transformed
+            continue
+        if _prop_removed_by_action(scene, prop):
             end_state.pop(prop_id, None)
     return start_state, end_state
 

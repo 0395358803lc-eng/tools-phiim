@@ -62,10 +62,7 @@ TERM_ALTERNATIVES: dict[str, tuple[str, ...]] = {
         "top right corner of the blue ticket",
         "right corner of the blue ticket",
     ),
-    "lần này anh nhớ đúng thứ tự rồi": (
-        "lần này anh nhớ đúng thứ tự rồi",
-        "this time i remembered the right order",
-    ),
+    "lần này anh nhớ đúng thứ tự rồi": ("lần này anh nhớ đúng thứ tự rồi",),
 }
 
 
@@ -452,6 +449,12 @@ def audit_project(
         error("FLOW_PROMPT_BLANK", "At least one production scene has an empty Flow prompt")
     if len(prompts) != len(set(prompts)):
         error("FLOW_PROMPT_DUPLICATE", "Duplicate Flow prompts remain after finalization")
+    for scene in project.scenes:
+        if scene.source_text.strip() not in scene.flow_prompt:
+            error(
+                "SOURCE_BEAT_NOT_LOCKED",
+                f"{scene.id} Flow prompt does not contain the verbatim screenplay source beat",
+            )
 
     if project.continuity_score != 100:
         error("CONTINUITY_SCORE", f"Continuity score is {project.continuity_score}, expected 100")

@@ -50,7 +50,7 @@ def test_prop_negation_and_temporal_boundary_are_source_grounded() -> None:
     assert ticket.id in mentioned_props(second, project.props)
 
 
-def test_destroyed_prop_is_removed_from_end_state_and_not_carried_forward() -> None:
+def test_torn_prop_becomes_fragments_and_persists_until_explicit_disposal() -> None:
     project = _project()
     ticket = next(item for item in project.props if "ticket" in item.name.casefold())
     third, fourth = project.scenes[2], project.scenes[3]
@@ -62,7 +62,8 @@ def test_destroyed_prop_is_removed_from_end_state_and_not_carried_forward() -> N
         direct_continuation=False,
     )
     assert ticket.id in start
-    assert ticket.id not in end
+    assert ticket.id in end
+    assert "two physical pieces" in end[ticket.id]
 
     next_start, _ = safe_prop_states(
         fourth,
@@ -70,4 +71,5 @@ def test_destroyed_prop_is_removed_from_end_state_and_not_carried_forward() -> N
         end,
         direct_continuation=_is_direct_continuation(third, fourth),
     )
-    assert ticket.id not in next_start
+    assert ticket.id in next_start
+    assert "two physical pieces" in next_start[ticket.id]
