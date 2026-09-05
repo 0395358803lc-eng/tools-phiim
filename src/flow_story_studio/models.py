@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .flow_ui_contract import DEFAULT_FLOW_VIDEO_MODEL
 from .migrations import CURRENT_PROJECT_SCHEMA_VERSION
 
 
@@ -29,7 +30,7 @@ class VideoSettings(StrictModel):
     auto_continuity: bool = True
     quality_threshold: int = Field(default=85, ge=0, le=100)
     provider: Literal["mock", "google-flow"] = "mock"
-    video_model: str = "veo-3.1-lite-lower-priority"
+    video_model: str = DEFAULT_FLOW_VIDEO_MODEL
     analysis_provider: Literal["offline", "xkiro"] = "offline"
     analysis_model: str = ""
 
