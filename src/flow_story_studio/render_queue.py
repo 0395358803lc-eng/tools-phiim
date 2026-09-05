@@ -20,7 +20,7 @@ from .models import (
     VisualIssue,
     VisualQCReport,
 )
-from .production_gate import is_scene_production_ready
+from .production_gate import is_scene_production_ready, scene_production_score_floor
 from .providers.mock import MockProvider
 from .reference_manager import ReferenceManager, promote_accepted_scene_references
 from .scene_contracts import verify_scene_contract
@@ -245,12 +245,7 @@ class RenderQueue:
             reasons.append(f"Visual QC: {scene.visual_qc.status}")
         if scene.continuity_qc.status not in {"Passed", "NotApplicable"}:
             reasons.append(f"Continuity QC: {scene.continuity_qc.status}")
-        components = [scene.visual_qc.score]
-        if scene.continuity_qc.status != "NotApplicable":
-            components.append(scene.continuity_qc.score)
-        if scene.quality:
-            components.append(scene.quality.score)
-        score = round(sum(components) / len(components)) if components else 0
+        score = scene_production_score_floor(scene)
         scene.acceptance = ProductionAcceptance(
             status="Rejected" if reasons else "Accepted",
             score=score,
