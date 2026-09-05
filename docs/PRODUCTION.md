@@ -36,7 +36,7 @@ Unhandled desktop/thread/API exceptions and background analysis/render/final-vid
 
 ## Credentials and local API
 
-xKiro API credentials and legacy Google Flow fallback cookies remain protected by Windows DPAPI. gflow authentication lives in its local Chrome profile and that runtime profile must never be committed or packaged as a shared credential. Desktop sessions generate a random per-process session token. Mutating API requests (`POST`, `PUT`, `PATCH`, `DELETE`) require that token in `X-Flow-Studio-Session`. The token is passed to the frontend only through the initial URL fragment and removed from browser history immediately after startup.
+xKiro API credentials and the Google Flow CLI session remain protected by Windows DPAPI. Flow CLI runtime cookies must never be committed or packaged as shared credentials. Desktop sessions generate a random per-process session token. Mutating API requests (`POST`, `PUT`, `PATCH`, `DELETE`) require that token in `X-Flow-Studio-Session`. The token is passed to the frontend only through the initial URL fragment and removed from browser history immediately after startup.
 
 The API continues to bind only to `127.0.0.1` on a random port.
 
@@ -46,15 +46,12 @@ A workspace is protected by `.flow-story-studio.lock`. A second TH Media process
 
 ## Dependency reproducibility
 
-`requirements.lock.txt` contains the validated Windows/Python 3.12 constraint set. The vendored `flow_cli-0.6.0-py3-none-any.whl` is additionally pinned by SHA-256 in `vendor/SHA256SUMS.txt` because it is not available for PyPI vulnerability lookup. The primary Flow transport is `@swissmarley/gflow-cli@1.1.1`, requiring Node.js 20+ and Google Chrome; `setup.ps1` validates or installs those prerequisites and enforces the npm package version.
+`requirements.lock.txt` contains the validated Windows/Python 3.12 constraint set. The vendored `flow_cli-0.6.0-py3-none-any.whl` is additionally pinned by SHA-256 in `vendor/SHA256SUMS.txt` because it is not available for PyPI vulnerability lookup. The Google Flow transport is the vendored Python Flow CLI wheel; `setup.ps1` installs that wheel and Playwright Chromium without a Node/npm transport.
 
 ## External provider risk
 
-Google Flow remains an external browser/UI dependency outside this application's control. Production support should treat Flow UI changes as a provider outage risk. The primary transport is gflow + a real Chrome profile; the legacy Python Flow CLI/cookie path is fallback only. Recovery is fail-closed: an existing upstream job identity must be recovered or explicitly force-rerendered, never silently resubmitted. No local release can guarantee an upstream Google interface remains stable.
+Google Flow remains an external browser/UI dependency outside this application's control. Production support should treat Flow UI changes as a provider outage risk. The only transport is the integrated Python Flow CLI with its encrypted authenticated session. Recovery is fail-closed: an existing upstream job identity must be recovered or explicitly force-rerendered, never silently resubmitted. No local release can guarantee an upstream Google interface remains stable.
 
-### Current gflow packaging limitation
-
-The PyInstaller one-file executable does not currently bundle Node.js or the npm gflow runtime. A production workstation using the primary transport must therefore provision Node.js 20+, Google Chrome, and `@swissmarley/gflow-cli@1.1.1` before launch. Do not describe the current EXE as fully self-contained for gflow until the installer bundles and verifies that runtime.
 
 ## Release signing
 
