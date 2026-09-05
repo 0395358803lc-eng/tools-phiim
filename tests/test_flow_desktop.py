@@ -111,6 +111,19 @@ def test_flow_403_retries_headed_and_remembers_mode(tmp_path: Path) -> None:
     assert integration._force_headed_browser is True
 
 
+def test_gflow_installed_without_profile_requests_login(tmp_path: Path) -> None:
+    integration = FlowCLIIntegration(tmp_path)
+    integration.gflow_executable = str(tmp_path / "gflow.cmd")
+
+    status = asyncio.run(integration.status())
+
+    assert status.configured is False
+    assert status.transport == "none"
+    assert status.gflow_available is True
+    assert status.gflow_profile_ready is False
+    assert "gflow auth login" in status.message
+
+
 def test_gflow_profile_status_reports_primary_transport(tmp_path: Path) -> None:
     integration = FlowCLIIntegration(tmp_path)
     integration.gflow_executable = str(tmp_path / "gflow.cmd")
