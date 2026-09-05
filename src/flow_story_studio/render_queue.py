@@ -64,7 +64,10 @@ class RenderQueue:
 
     @classmethod
     def _refresh_final_video(cls, project: Project) -> None:
-        if project.scenes and all(cls._is_finally_accepted(project, item) for item in project.scenes):
+        all_accepted = all(
+            cls._is_finally_accepted(project, item) for item in project.scenes
+        )
+        if project.scenes and all_accepted:
             project.final_video = FinalVideo(status="Ready", scene_count=len(project.scenes))
         elif project.final_video.status != "Merging":
             project.final_video = FinalVideo(status="NotReady")
