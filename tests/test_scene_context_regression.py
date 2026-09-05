@@ -1,5 +1,6 @@
 from flow_story_studio.analysis_providers.normalization import chain_scene_states
 from flow_story_studio.engines.analyzer import analyze_story
+from flow_story_studio.engines.continuity import is_direct_continuation
 from flow_story_studio.engines.segmenter import SCENE_CONTEXT_PREFIX, narrative_text
 from flow_story_studio.models import AnalyzeRequest, VideoSettings
 
@@ -120,3 +121,32 @@ Minh run rẩy và nhìn điện thoại trên bàn.
         "Đường phố",
         "Căn hộ",
     ]
+
+
+def test_authored_continuous_heading_uses_direct_dependency() -> None:
+    screenplay = """
+TARGET RUNTIME: 16 seconds
+
+CHARACTERS
+- ALEX, adult man.
+
+SCENE 1 — APARTMENT — NIGHT — PRESENT
+Alex sits beside the table.
+
+SCENE 2 — APARTMENT — NIGHT — CONTINUOUS
+Alex stands and walks to the door.
+"""
+    project = analyze_story(
+        AnalyzeRequest(
+            name="continuous dependency",
+            original_text=screenplay,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    context_scenes = [
+        scene for scene in project.scenes if scene.source_text.startswith(SCENE_CONTEXT_PREFIX)
+    ]
+    assert len(context_scenes) == 2
+    assert is_direct_continuation(context_scenes[0], context_scenes[1])
+    assert context_scenes[1].visual_plan.dependency_mode == "direct"
+    assert context_scenes[1].visual_plan.anchor_scene_id == context_scenes[0].id
