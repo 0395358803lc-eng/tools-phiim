@@ -5,7 +5,6 @@ from flow_story_studio.providers.base import RenderResult
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.storage import ProjectStorage
 
-
 SCRIPT = """
 SCENE 1 — ROOM — NIGHT
 A person crosses the room and stops beside the table.

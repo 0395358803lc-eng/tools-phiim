@@ -5,7 +5,6 @@ from flow_story_studio.engines.analyzer import analyze_story
 from flow_story_studio.models import AnalyzeRequest, VisualQCReport
 from flow_story_studio.visual_qc import VisualQCAnalyzer
 
-
 SCRIPT = """
 SCENE 1 — ROOM — NIGHT
 A person crosses the room and stops beside the table.
