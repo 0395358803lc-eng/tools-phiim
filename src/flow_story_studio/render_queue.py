@@ -179,6 +179,7 @@ class RenderQueue:
                 prop_consistency=100,
                 wardrobe_consistency=100,
                 lighting_consistency=100,
+                action_consistency=100,
                 composition_consistency=100,
                 model_id="mock",
             )
