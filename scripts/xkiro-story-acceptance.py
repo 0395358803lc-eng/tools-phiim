@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 """Run a live xKiro screenplay acceptance audit against source-truth invariants."""
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ def scene_number(source_text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def select_minimax_27_free(models: list[typing.Any]) -> Any:
+def select_minimax_27_free(models: list[typing.Any]) -> typing.Any:
     candidates = []
     for model in models:
         raw = f"{model.id} {model.display_name}".casefold()
@@ -177,7 +178,7 @@ def canonical_audio(project: Project, scenes: list[typing.Any]) -> list[tuple[st
     return events
 
 
-def prop_ids_for_scene(scene: Any) -> set[str]:
+def prop_ids_for_scene(scene: typing.Any) -> set[str]:
     values = set(scene.start_state.prop_positions) | set(scene.end_state.prop_positions)
     values.update(scene.visual_plan.prop_reference_ids)
     return values
@@ -344,8 +345,12 @@ def audit_project(
             (str(speaker), str(text))
             for speaker, text in manifest["audio"].get(str(number), [])
         ]
-        actual_counter = collections.Counter((fold(speaker), fold(text)) for speaker, text in actual_audio)
-        expected_counter = collections.Counter((fold(speaker), fold(text)) for speaker, text in expected_audio)
+        actual_counter = collections.Counter(
+            (fold(speaker), fold(text)) for speaker, text in actual_audio
+        )
+        expected_counter = collections.Counter(
+            (fold(speaker), fold(text)) for speaker, text in expected_audio
+        )
         if actual_counter != expected_counter:
             error(
                 "AUDIO_SOURCE_TRUTH",
