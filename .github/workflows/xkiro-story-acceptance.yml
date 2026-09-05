@@ -9,6 +9,12 @@ on:
       - "acceptance/fixtures/**"
       - "scripts/xkiro-story-acceptance.py"
       - ".github/workflows/xkiro-story-acceptance.yml"
+      - "src/flow_story_studio/analysis_providers/**"
+      - "src/flow_story_studio/engines/analyzer.py"
+      - "src/flow_story_studio/engines/continuity.py"
+      - "src/flow_story_studio/engines/prompt_generator.py"
+      - "src/flow_story_studio/visual_bible.py"
+      - "src/flow_story_studio/models.py"
   workflow_dispatch:
 
 permissions:
