@@ -69,6 +69,7 @@ def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> 
 def check_project(project: Project, auto_fix: bool = False) -> Project:
     result = deepcopy(project)
     all_warnings: list[str] = []
+    active_warnings: list[str] = []
     previous: Scene | None = None
     for index, scene in enumerate(result.scenes):
         retained = [
@@ -81,10 +82,12 @@ def check_project(project: Project, auto_fix: bool = False) -> Project:
         scene.order = index + 1
         if auto_fix and is_direct_continuation(previous, scene):
             scene.start_state = deepcopy(previous.end_state)
-        scene.warnings = retained + scene_warnings(previous, scene, result)
+        current_warnings = scene_warnings(previous, scene, result)
+        scene.warnings = retained + current_warnings
         all_warnings.extend(f"{scene.id}: {warning}" for warning in scene.warnings)
+        active_warnings.extend(f"{scene.id}: {warning}" for warning in current_warnings)
         previous = scene
-    penalty = min(60, len(all_warnings) * 6)
+    penalty = min(60, len(active_warnings) * 6)
     result.continuity_score = max(0, 100 - penalty)
     result.continuity_warnings = all_warnings
     return result
