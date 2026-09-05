@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import json
 import os
+import pathlib
 import re
+import typing
 import unicodedata
-from collections import Counter, defaultdict
-from pathlib import Path
-from typing import Any
 
 from flow_story_studio.analysis_providers.xkiro import XKiroClient
 from flow_story_studio.models import AnalyzeRequest, Project, VideoSettings
@@ -70,7 +70,7 @@ def scene_number(source_text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def select_minimax_27_free(models: list[Any]) -> Any:
+def select_minimax_27_free(models: list[typing.Any]) -> Any:
     candidates = []
     for model in models:
         raw = f"{model.id} {model.display_name}".casefold()
@@ -101,7 +101,7 @@ def select_minimax_27_free(models: list[Any]) -> Any:
     return candidates[0]
 
 
-def find_character(project: Project, expected_name: str) -> Any | None:
+def find_character(project: Project, expected_name: str) -> typing.Any | None:
     target = fold(expected_name)
     for character in project.characters:
         if fold(character.name) == target:
@@ -109,7 +109,7 @@ def find_character(project: Project, expected_name: str) -> Any | None:
     return None
 
 
-def find_prop(project: Project, aliases: list[str]) -> Any | None:
+def find_prop(project: Project, aliases: list[str]) -> typing.Any | None:
     alias_keys = [fold(value) for value in aliases]
     for prop in project.props:
         name = fold(prop.name)
@@ -131,7 +131,7 @@ def reference_text(project: Project, entity_id: str) -> str:
     return ""
 
 
-def model_text(model: Any) -> str:
+def model_text(model: typing.Any) -> str:
     values = model.model_dump()
     parts: list[str] = []
     for value in values.values():
@@ -144,7 +144,7 @@ def model_text(model: Any) -> str:
     return " ".join(parts)
 
 
-def output_text(scenes: list[Any]) -> str:
+def output_text(scenes: list[typing.Any]) -> str:
     parts: list[str] = []
     for scene in scenes:
         parts.extend(
@@ -168,7 +168,7 @@ def output_text(scenes: list[Any]) -> str:
     return " ".join(parts)
 
 
-def canonical_audio(project: Project, scenes: list[Any]) -> list[tuple[str, str]]:
+def canonical_audio(project: Project, scenes: list[typing.Any]) -> list[tuple[str, str]]:
     by_id = {item.id: item.name for item in project.characters}
     events: list[tuple[str, str]] = []
     for scene in scenes:
@@ -185,21 +185,21 @@ def prop_ids_for_scene(scene: Any) -> set[str]:
 
 def audit_project(
     project: Project,
-    manifest: dict[str, Any],
-    selected_model: Any,
-) -> dict[str, Any]:
-    errors: list[dict[str, Any]] = []
-    warnings: list[dict[str, Any]] = []
-    scene_audit: list[dict[str, Any]] = []
+    manifest: dict[str, typing.Any],
+    selected_model: typing.Any,
+) -> dict[str, typing.Any]:
+    errors: list[dict[str, typing.Any]] = []
+    warnings: list[dict[str, typing.Any]] = []
+    scene_audit: list[dict[str, typing.Any]] = []
 
     def error(code: str, message: str, scene: int | None = None) -> None:
-        item: dict[str, Any] = {"code": code, "message": message}
+        item: dict[str, typing.Any] = {"code": code, "message": message}
         if scene is not None:
             item["scene"] = scene
         errors.append(item)
 
     def warning(code: str, message: str, scene: int | None = None) -> None:
-        item: dict[str, Any] = {"code": code, "message": message}
+        item: dict[str, typing.Any] = {"code": code, "message": message}
         if scene is not None:
             item["scene"] = scene
         warnings.append(item)
@@ -236,7 +236,7 @@ def audit_project(
                     f"{expected_name} is missing identity/wardrobe fact: {term}",
                 )
 
-    prop_map: dict[str, Any] = {}
+    prop_map: dict[str, typing.Any] = {}
     for prop_key, rule in manifest["props"].items():
         prop = find_prop(project, rule["aliases"])
         if prop is None:
@@ -248,7 +248,7 @@ def audit_project(
             if not contains_term(text, term):
                 error("PROP_LOCK", f"{prop_key} is missing locked fact: {term}")
 
-    groups: dict[int, list[Any]] = defaultdict(list)
+    groups: dict[int, list[typing.Any]] = collections.defaultdict(list)
     unnumbered: list[str] = []
     for scene in sorted(project.scenes, key=lambda item: item.order):
         number = scene_number(scene.source_text)
@@ -258,7 +258,10 @@ def audit_project(
             groups[number].append(scene)
 
     if unnumbered:
-        error("SCENE_MAPPING", "Production scenes missing screenplay scene number: " + ", ".join(unnumbered))
+        error(
+            "SCENE_MAPPING",
+            "Production scenes missing screenplay scene number: " + ", ".join(unnumbered),
+        )
     expected_count = int(manifest["screenplay_scene_count"])
     missing_groups = [number for number in range(1, expected_count + 1) if not groups[number]]
     extra_groups = sorted(number for number in groups if number < 1 or number > expected_count)
@@ -341,8 +344,8 @@ def audit_project(
             (str(speaker), str(text))
             for speaker, text in manifest["audio"].get(str(number), [])
         ]
-        actual_counter = Counter((fold(speaker), fold(text)) for speaker, text in actual_audio)
-        expected_counter = Counter((fold(speaker), fold(text)) for speaker, text in expected_audio)
+        actual_counter = collections.Counter((fold(speaker), fold(text)) for speaker, text in actual_audio)
+        expected_counter = collections.Counter((fold(speaker), fold(text)) for speaker, text in expected_audio)
         if actual_counter != expected_counter:
             error(
                 "AUDIO_SOURCE_TRUTH",
@@ -488,10 +491,10 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--script", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--project-output", type=Path, required=True)
+    parser.add_argument("--script", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument("--project-output", type=pathlib.Path, required=True)
     return parser.parse_args()
 
 
