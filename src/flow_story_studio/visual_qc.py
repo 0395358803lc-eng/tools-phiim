@@ -102,20 +102,38 @@ class VisualQCAnalyzer:
                 ],
             )
         if all(
-            (scene.visual_qc.first_frame, scene.visual_qc.middle_frame, scene.visual_qc.last_frame)
+            (
+                scene.visual_qc.first_frame,
+                scene.visual_qc.quarter_frame,
+                scene.visual_qc.middle_frame,
+                scene.visual_qc.three_quarter_frame,
+                scene.visual_qc.last_frame,
+            )
         ):
             frames = VisualFrames(
                 first=scene.visual_qc.first_frame,
+                quarter=scene.visual_qc.quarter_frame,
                 middle=scene.visual_qc.middle_frame,
+                three_quarter=scene.visual_qc.three_quarter_frame,
                 last=scene.visual_qc.last_frame,
             )
         else:
             frames = await extract_visual_frames(self.data_root, project.id, scene.id, video)
-        if not all((frames.first, frames.middle, frames.last)):
+        if not all(
+            (
+                frames.first,
+                frames.quarter,
+                frames.middle,
+                frames.three_quarter,
+                frames.last,
+            )
+        ):
             return VisualQCReport(
                 status="Unavailable",
                 first_frame=frames.first,
+                quarter_frame=frames.quarter,
                 middle_frame=frames.middle,
+                three_quarter_frame=frames.three_quarter,
                 last_frame=frames.last,
                 issues=[
                     VisualIssue(
@@ -125,7 +143,9 @@ class VisualQCAnalyzer:
             )
         frame_paths = [
             _data_path(self.data_root, frames.first),
+            _data_path(self.data_root, frames.quarter),
             _data_path(self.data_root, frames.middle),
+            _data_path(self.data_root, frames.three_quarter),
             _data_path(self.data_root, frames.last),
         ]
         images = [path for path in frame_paths if path]
@@ -137,8 +157,10 @@ class VisualQCAnalyzer:
             set(scene.start_state.prop_positions) | set(scene.end_state.prop_positions)
         )
         prompt = f"""You are a strict film visual continuity QC inspector.
-The FIRST THREE images are first/middle/last frames from one rendered scene.
+The FIRST FIVE images are first/25%/50%/75%/last frames from one rendered scene.
 Any later images are approved canonical references. Compare against them when present.
+Evaluate identity, wardrobe, props, location, lighting and action across the full five-frame
+progression, not only at the scene boundaries.
 Expected visible characters: {[characters.get(cid, cid) for cid in scene.characters]}
 Expected location: {location.name if location else scene.location_id}
 Expected props: {[props.get(pid, pid) for pid in prop_ids]}
@@ -160,7 +182,9 @@ severity ('warning' or 'error'), message. score must reflect production acceptab
             return VisualQCReport(
                 status="Unavailable",
                 first_frame=frames.first,
+                quarter_frame=frames.quarter,
                 middle_frame=frames.middle,
+                three_quarter_frame=frames.three_quarter,
                 last_frame=frames.last,
                 issues=[VisualIssue(code="VISION_UNAVAILABLE", message=str(exc)[:500])],
             )
@@ -189,7 +213,9 @@ severity ('warning' or 'error'), message. score must reflect production acceptab
             status="Passed" if passed else "Failed",
             score=score,
             first_frame=frames.first,
+            quarter_frame=frames.quarter,
             middle_frame=frames.middle,
+            three_quarter_frame=frames.three_quarter,
             last_frame=frames.last,
             model_id=model_id,
             issues=issues,

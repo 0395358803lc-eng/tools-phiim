@@ -329,6 +329,37 @@ def export_domains(project: dict[str, Any], out_dir: Path) -> None:
     )
     write_json(data_dir / "visual-bible.json", project.get("visual_bible", {}))
     write_json(data_dir / "scenes.json", project.get("scenes", []))
+
+    film_model = project.get("film_model", {})
+    write_json(data_dir / "canonical-film-model.json", film_model)
+    if isinstance(film_model, dict):
+        write_json(data_dir / "audio-bible.json", film_model.get("audio_bible", {}))
+        write_json(data_dir / "scene-intents.json", film_model.get("scene_intents", []))
+    write_text(
+        data_dir / "film-model-hash.txt",
+        str(project.get("film_model_hash", "")),
+    )
+
+    scenes = project.get("scenes", [])
+    render_contracts = {
+        str(scene.get("id", "")): {
+            "render_contract_hash": scene.get("render_contract_hash", ""),
+            "render_contract": scene.get("render_contract", {}),
+        }
+        for scene in scenes
+        if isinstance(scene, dict)
+    }
+    accepted_states = {
+        str(scene.get("id", "")): {
+            "accepted_state_hash": scene.get("accepted_state_hash", ""),
+            "accepted_end_state": scene.get("accepted_end_state"),
+            "last_frame_file": scene.get("last_frame_file", ""),
+        }
+        for scene in scenes
+        if isinstance(scene, dict)
+    }
+    write_json(data_dir / "render-contracts.json", render_contracts)
+    write_json(data_dir / "accepted-states.json", accepted_states)
     write_json(
         data_dir / "continuity.json",
         {
@@ -1056,6 +1087,8 @@ def orchestrate(
         write_json(output_dir / "06-validation" / "continuity-report.json", continuity)
         result["continuity_chain_ok"] = continuity["chain_ok"]
         if not continuity["chain_ok"]:
+            if exit_code == EXIT_OK:
+                exit_code = EXIT_VALIDATION_FAILED
             issues.append(
                 f"Direct continuation chain has "
                 f"{len(continuity['broken_boundaries'])} broken boundaries."
@@ -1073,6 +1106,8 @@ def orchestrate(
             result["semantic_checks_timeline"] = len(checks["timeline"])
             result["semantic_checks_hard_facts"] = len(checks["hard_facts"])
             if semantic["error_count"]:
+                if exit_code == EXIT_OK:
+                    exit_code = EXIT_VALIDATION_FAILED
                 issues.append(
                     f"Source-truth comparison found {semantic['error_count']} mismatches "
                     f"({semantic['warning_count']} warnings); review for the independent verdict."
@@ -1094,17 +1129,21 @@ def orchestrate(
     manifest_entries = build_manifest(output_dir)
     write_json(output_dir / "manifest.json", {"files": manifest_entries})
     result["manifest_entries"] = len(manifest_entries)
+    write_json(output_dir / "result.json", result)
+    write_text(output_dir / "REPORT.md", build_report(result, timing))
 
     scan_hits = secret_scan(output_dir)
     if scan_hits:
-        result["secret_scan_hits"] = scan_hits
-        result["secrets_exported"] = True
-        write_json(output_dir / "result.json", result)
-        write_text(output_dir / "REPORT.md", build_report(result, timing))
         exit_code = EXIT_SECRET_SCAN
         issues.append(
             f"Secret scan found patterns in {len(scan_hits)} file(s); inspect and clean."
         )
+        result["secret_scan_hits"] = scan_hits
+        result["secrets_exported"] = True
+        result["status"] = "FAIL"
+        result["remaining_issues"] = issues
+        write_json(output_dir / "result.json", result)
+        write_text(output_dir / "REPORT.md", build_report(result, timing))
     return exit_code, result, environment
 
 

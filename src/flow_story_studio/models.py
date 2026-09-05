@@ -138,9 +138,24 @@ class VisualQCReport(StrictModel):
     action_consistency: int = Field(default=0, ge=0, le=100)
     composition_consistency: int = Field(default=0, ge=0, le=100)
     first_frame: str = ""
+    quarter_frame: str = ""
     middle_frame: str = ""
+    three_quarter_frame: str = ""
     last_frame: str = ""
     model_id: str = ""
+    issues: list[VisualIssue] = Field(default_factory=list)
+
+
+class AudioQCReport(StrictModel):
+    status: Literal["Pending", "Passed", "Failed", "Unavailable"] = "Pending"
+    score: int = Field(default=0, ge=0, le=100)
+    audio_present: bool = False
+    sample_rate_hz: int = Field(default=0, ge=0)
+    channels: int = Field(default=0, ge=0)
+    integrated_lufs: float | None = None
+    true_peak_db: float | None = None
+    clipping_detected: bool = False
+    model_id: str = "ffmpeg"
     issues: list[VisualIssue] = Field(default_factory=list)
 
 
@@ -237,10 +252,19 @@ class Scene(StrictModel):
     upstream_resource_name: str = ""
     quality: QualityReport | None = None
     visual_qc: VisualQCReport = Field(default_factory=VisualQCReport)
+    audio_qc: AudioQCReport = Field(default_factory=AudioQCReport)
     continuity_qc: ContinuityQCReport = Field(default_factory=ContinuityQCReport)
     acceptance: ProductionAcceptance = Field(default_factory=ProductionAcceptance)
     contract_version: int = 1
     contract_hash: str = ""
+    orchestration: dict[str, object] = Field(default_factory=dict)
+    render_contract: dict[str, object] = Field(default_factory=dict)
+    render_contract_hash: str = ""
+    accepted_end_state: ContinuityState | None = None
+    accepted_state_hash: str = ""
+    render_attempt: int = Field(default=0, ge=0)
+    runtime_repair_instruction: str = ""
+    repair_history: list[str] = Field(default_factory=list)
     ai_locked: bool = False
     ai_lock_reason: str = "Scene cũ chưa được AI Continuity Lock duyệt"
 
@@ -275,6 +299,8 @@ class Project(StrictModel):
     continuity_score: int = 100
     continuity_warnings: list[str] = Field(default_factory=list)
     flow_project_id: str = ""
+    film_model: dict[str, object] = Field(default_factory=dict)
+    film_model_hash: str = ""
     final_video: FinalVideo = Field(default_factory=FinalVideo)
 
 

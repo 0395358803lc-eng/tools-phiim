@@ -12,6 +12,8 @@ import unicodedata
 
 from ..engines.continuity import check_project, is_direct_continuation
 from ..engines.prompt_generator import make_flow_prompt, make_visual_prompt
+from ..film import orchestrator as film_orchestrator
+from ..film.validation import assert_project_hard_constraints
 from ..models import Character, ContinuityState, Location, Project, Prop
 from ..scene_contracts import seal_project_contracts
 from ..visual_bible import build_visual_bible
@@ -406,7 +408,8 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     # already source-grounded state so stale pre-finalization warnings do not survive.
     project = check_project(project, auto_fix=False)
 
-    # Build the Visual Bible from the exact final semantic state, then compile prompts.
+    # Build orchestration from the exact final semantic state, then compile prompts.
+    project = film_orchestrator.prepare(project)
     project = build_visual_bible(project)
     for index, scene in enumerate(project.scenes):
         visible = set(scene.characters)
@@ -433,4 +436,6 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
         )
 
     _assert_structural_integrity(project)
+    project = film_orchestrator.finalize(project)
+    assert_project_hard_constraints(project)
     return seal_project_contracts(project)

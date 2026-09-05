@@ -1,6 +1,8 @@
 from flow_story_studio.engines.analyzer import analyze_story
+from flow_story_studio.film.state_delta import commit_accepted_runtime_state
 from flow_story_studio.models import (
     AnalyzeRequest,
+    AudioQCReport,
     ContinuityQCReport,
     ProductionAcceptance,
     QualityReport,
@@ -42,6 +44,7 @@ def _accepted_project():
     scene.result_file = "renders/scene.mp4"
     scene.render_provider = project.settings.provider
     scene.render_model = project.settings.video_model
+    commit_accepted_runtime_state(scene)
     return project, scene
 
 
@@ -119,4 +122,34 @@ def test_google_flow_gate_requires_visual_boundary_evidence() -> None:
 
     blockers = _gate().scene_production_blockers(project, scene)
 
-    assert any("boundary evidence" in item for item in blockers)
+    assert any("five-frame evidence" in item for item in blockers)
+
+
+def test_google_flow_gate_requires_passing_audio_qc() -> None:
+    project, scene = _accepted_project()
+    project.settings.provider = "google-flow"
+    scene.render_provider = "google-flow"
+    scene.visual_qc.first_frame = "first.png"
+    scene.visual_qc.quarter_frame = "quarter.png"
+    scene.visual_qc.middle_frame = "middle.png"
+    scene.visual_qc.three_quarter_frame = "three-quarter.png"
+    scene.visual_qc.last_frame = "last.png"
+    scene.visual_qc.model_id = "vision-model"
+    scene.audio_qc = AudioQCReport(
+        status="Failed",
+        score=20,
+        audio_present=True,
+        sample_rate_hz=48_000,
+        channels=2,
+        integrated_lufs=-30.0,
+        true_peak_db=0.0,
+        clipping_detected=True,
+        model_id="ffmpeg-ebur128",
+    )
+    scene.acceptance.score = 20
+
+    blockers = _gate().scene_production_blockers(project, scene)
+
+    assert any("audio QC is Failed" in item for item in blockers)
+    assert any("audio true peak" in item for item in blockers)
+    assert not _gate().is_scene_production_ready(project, scene)

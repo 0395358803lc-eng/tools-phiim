@@ -53,6 +53,28 @@ button.disabled=false;button.textContent='Chọn thư mục trên máy tính →
 </script></body></html>"""
 
 
+def _migrate_legacy_credentials(new_root: Path, legacy_root: Path) -> None:
+    """Copy only missing encrypted credential files into the current app vault."""
+    filenames = ("xkiro-api-key.bin", "google-flow.cookies.bin")
+    try:
+        new_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        LOGGER.warning("Could not create credential directory: %s", exc)
+        return
+    for filename in filenames:
+        source = legacy_root / filename
+        target = new_root / filename
+        if target.exists() or not source.is_file():
+            continue
+        temporary = target.with_suffix(target.suffix + ".migrate")
+        try:
+            temporary.write_bytes(source.read_bytes())
+            os.replace(temporary, target)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            LOGGER.warning("Could not migrate legacy credential %s: %s", filename, exc)
+
+
 def _available_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
@@ -98,10 +120,9 @@ class DesktopSession:
         legacy_secret_root = legacy_data_root / "secrets"
         if credential_root is not None:
             self._credential_root = credential_root
-        elif new_secret_root.exists() or not legacy_secret_root.exists():
-            self._credential_root = new_secret_root
         else:
-            self._credential_root = legacy_secret_root
+            _migrate_legacy_credentials(new_secret_root, legacy_secret_root)
+            self._credential_root = new_secret_root
         configure_logging(app_data_root / "logs")
 
     def _start_backend(self, workspace: Path) -> str:

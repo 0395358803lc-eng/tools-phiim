@@ -14,7 +14,9 @@ from pathlib import Path
 @dataclass(frozen=True)
 class VisualFrames:
     first: str = ""
+    quarter: str = ""
     middle: str = ""
+    three_quarter: str = ""
     last: str = ""
 
 
@@ -136,17 +138,40 @@ async def extract_visual_frames(
     if not ffmpeg or not video.is_file():
         return VisualFrames()
     duration = await asyncio.to_thread(_duration_seconds, ffmpeg, video)
-    middle_at = max(0.05, (duration or 0.2) / 2.0)
+    actual_duration = max(0.2, duration or 0.2)
+
+    def sample_at(fraction: float) -> float:
+        return min(
+            max(0.05, actual_duration * fraction),
+            max(0.05, actual_duration - 0.05),
+        )
+
     root = data_root / "references" / project_id / "qc"
     first_target = root / f"{scene_id}-first.jpg"
+    quarter_target = root / f"{scene_id}-quarter.jpg"
     middle_target = root / f"{scene_id}-middle.jpg"
+    three_quarter_target = root / f"{scene_id}-three-quarter.jpg"
     last_target = root / f"{scene_id}-last.jpg"
-    first, middle, last = await asyncio.gather(
+    first, quarter, middle, three_quarter, last = await asyncio.gather(
         _extract_relative_at(data_root, ffmpeg, video, first_target, 0.05),
-        _extract_relative_at(data_root, ffmpeg, video, middle_target, middle_at),
+        _extract_relative_at(
+            data_root, ffmpeg, video, quarter_target, sample_at(0.25)
+        ),
+        _extract_relative_at(
+            data_root, ffmpeg, video, middle_target, sample_at(0.50)
+        ),
+        _extract_relative_at(
+            data_root, ffmpeg, video, three_quarter_target, sample_at(0.75)
+        ),
         _extract_relative_from_end(data_root, ffmpeg, video, last_target),
     )
-    return VisualFrames(first=first, middle=middle, last=last)
+    return VisualFrames(
+        first=first,
+        quarter=quarter,
+        middle=middle,
+        three_quarter=three_quarter,
+        last=last,
+    )
 
 
 async def extract_qc_frames(

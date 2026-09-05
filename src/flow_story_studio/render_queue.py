@@ -7,11 +7,18 @@ from collections import defaultdict
 from pathlib import Path
 
 from .analysis_providers.xkiro import XKiroClient
+from .audio_qc import AudioQCAnalyzer
 from .engines.continuity import is_direct_continuation
 from .engines.quality import score_scene
+from .film.state_delta import (
+    clear_accepted_runtime_state,
+    commit_accepted_runtime_state,
+    continuity_state_hash,
+)
 from .flow_integration import FlowCLIIntegration
 from .logging_config import get_logger
 from .models import (
+    AudioQCReport,
     ContinuityQCReport,
     FinalVideo,
     ProductionAcceptance,
@@ -41,6 +48,7 @@ class RenderQueue:
         self.storage = storage
         self.flow = flow
         self.data_root = (data_root or storage.root.parent).resolve()
+        self.audio = AudioQCAnalyzer(self.data_root)
         self.vision = VisualQCAnalyzer(self.data_root, xkiro) if xkiro else None
         self.references = (
             ReferenceManager(flow, self.vision, self.data_root) if self.vision else None
@@ -108,7 +116,9 @@ class RenderQueue:
                 scene.last_frame_file = ""
                 scene.render_provider = ""
                 scene.render_model = ""
+                clear_accepted_runtime_state(scene)
                 scene.visual_qc = VisualQCReport()
+                scene.audio_qc = AudioQCReport()
                 scene.continuity_qc = ContinuityQCReport()
                 scene.acceptance = ProductionAcceptance()
                 if force_rerender:
@@ -137,16 +147,27 @@ class RenderQueue:
             return "Scene Packet contract không còn khớp dữ liệu đã seal"
         return ""
 
-    def _dependency_blocker(self, project: Project, scene: Scene) -> Scene | None:
+    def _dependency_block_reason(self, project: Project, scene: Scene) -> str:
         if scene.visual_plan.dependency_mode != "direct" or scene.order <= 1:
-            return None
+            return ""
         previous = next(
             (item for item in project.scenes if item.order == scene.order - 1),
             None,
         )
         if not previous or not is_direct_continuation(previous, scene):
-            return None
-        return None if self._is_finally_accepted(project, previous) else previous
+            return ""
+        if not self._is_finally_accepted(project, previous):
+            return f"Phụ thuộc scene {previous.order} chưa được Accepted"
+        if previous.accepted_end_state is None or not previous.accepted_state_hash:
+            return f"Scene {previous.order} chưa commit accepted state"
+        if continuity_state_hash(previous.accepted_end_state) != previous.accepted_state_hash:
+            return f"Accepted state hash của scene {previous.order} không hợp lệ"
+        if continuity_state_hash(scene.start_state) != previous.accepted_state_hash:
+            return (
+                f"Start state của scene {scene.order} không khớp accepted state "
+                f"scene {previous.order}"
+            )
+        return ""
 
     async def _prepare_reference(self, project: Project, scene: Scene) -> bool:
         if project.settings.provider != "google-flow":
@@ -185,6 +206,17 @@ class RenderQueue:
                 composition_consistency=100,
                 model_id="mock",
             )
+            scene.audio_qc = AudioQCReport(
+                status="Passed",
+                score=100,
+                audio_present=True,
+                sample_rate_hz=48_000,
+                channels=2,
+                integrated_lufs=-16.0,
+                true_peak_db=-1.0,
+                clipping_detected=False,
+                model_id="mock",
+            )
             scene.continuity_qc = (
                 ContinuityQCReport(status="Passed", score=100, model_id="mock")
                 if scene.visual_plan.dependency_mode == "direct"
@@ -221,6 +253,8 @@ class RenderQueue:
             )
             return
 
+        scene.audio_qc = await self.audio.inspect_scene(project, scene)
+
         if not self.vision:
             scene.visual_qc.status = "Unavailable"
             scene.visual_qc.issues = [
@@ -247,6 +281,8 @@ class RenderQueue:
             reasons.append("Preflight quality dưới ngưỡng")
         if scene.visual_qc.status != "Passed":
             reasons.append(f"Visual QC: {scene.visual_qc.status}")
+        if scene.audio_qc.status != "Passed":
+            reasons.append(f"Audio QC: {scene.audio_qc.status}")
         if scene.continuity_qc.status not in {"Passed", "NotApplicable"}:
             reasons.append(f"Continuity QC: {scene.continuity_qc.status}")
         score = scene_production_score_floor(scene)
@@ -279,17 +315,13 @@ class RenderQueue:
                         await self._update(project, scene, "Blocked", 0)
                         continue
 
-                    blocker = self._dependency_blocker(project, scene)
-                    if blocker:
+                    dependency_reason = self._dependency_block_reason(project, scene)
+                    if dependency_reason:
                         scene.acceptance = ProductionAcceptance(
                             status="Blocked",
-                            reasons=[
-                                f"Phụ thuộc scene {blocker.order} chưa được Accepted"
-                            ],
+                            reasons=[dependency_reason],
                         )
-                        scene.warnings.append(
-                            f"Blocked: scene {blocker.order} chưa qua Production Acceptance"
-                        )
+                        scene.warnings.append(f"Blocked: {dependency_reason}")
                         await self._update(project, scene, "Blocked", 0)
                         continue
 
@@ -339,6 +371,8 @@ class RenderQueue:
                     scene = next(item for item in project.scenes if item.id == scene_id)
                     await self._post_render_qc(project, scene)
                     accepted = scene.acceptance.status == "Accepted"
+                    if accepted:
+                        commit_accepted_runtime_state(scene)
                     await self._update(
                         project,
                         scene,

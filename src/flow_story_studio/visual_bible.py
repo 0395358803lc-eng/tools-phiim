@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from .engines.continuity import is_direct_continuation
+from .engines.continuity import enforce_frame_anchor_policy
+from .film.canonical import DependencyMode
+from .film.dependency import classify_dependency
+from .film.orchestrator import prepare
 from .models import Project, SceneVisualPlan, VisualBible, VisualReference
 
 
@@ -32,6 +35,8 @@ def _prop_lock(item) -> str:
 
 
 def build_visual_bible(project: Project) -> Project:
+    project = prepare(project)
+    project = enforce_frame_anchor_policy(project)
     existing = {item.entity_id: item for item in project.visual_bible.references}
     refs: list[VisualReference] = []
     for item in project.characters:
@@ -123,11 +128,11 @@ def build_visual_bible(project: Project) -> Project:
     previous = None
     current_anchor = ""
     for scene in project.scenes:
-        direct = is_direct_continuation(previous, scene)
-        if previous is None:
+        classified = classify_dependency(previous, scene)
+        if classified == DependencyMode.OPENING:
             mode = "opening"
             current_anchor = scene.id
-        elif direct:
+        elif classified == DependencyMode.DIRECT:
             mode = "direct"
         else:
             mode = "canonical"
@@ -164,10 +169,7 @@ def build_visual_bible(project: Project) -> Project:
             continue
 
         next_scene = project.scenes[index + 1]
-        if (
-            next_scene.visual_plan.dependency_mode == "direct"
-            and is_direct_continuation(scene, next_scene)
-        ):
+        if next_scene.visual_plan.dependency_mode == "direct":
             boundary_note = (
                 f"Direct continuation from {scene.id}; {next_scene.id} may anchor to this "
                 "accepted final frame as the physical-state anchor."

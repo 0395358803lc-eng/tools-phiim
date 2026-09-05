@@ -7,7 +7,7 @@ import json
 
 from .models import Project, Scene
 
-SCENE_CONTRACT_VERSION = 2
+SCENE_CONTRACT_VERSION = 3
 
 
 def _contract_payload(scene: Scene) -> dict[str, object]:
@@ -32,6 +32,9 @@ def _contract_payload(scene: Scene) -> dict[str, object]:
         "start_state": scene.start_state.model_dump(mode="json"),
         "end_state": scene.end_state.model_dump(mode="json"),
         "visual_plan": scene.visual_plan.model_dump(mode="json"),
+        "orchestration": scene.orchestration,
+        "render_contract": scene.render_contract,
+        "render_contract_hash": scene.render_contract_hash,
     }
 
 

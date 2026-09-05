@@ -73,15 +73,23 @@ async def test_inspect_scene_scores_real_frame_files_without_ffmpeg(tmp_path: Pa
     scene.result_file = video.relative_to(tmp_path).as_posix()
 
     frame_paths = []
-    for name in ("first.jpg", "middle.jpg", "last.jpg"):
+    for name in (
+        "first.jpg",
+        "quarter.jpg",
+        "middle.jpg",
+        "three-quarter.jpg",
+        "last.jpg",
+    ):
         frame = tmp_path / "frames" / name
         frame.parent.mkdir(parents=True, exist_ok=True)
         frame.write_bytes(name.encode())
         frame_paths.append(frame.relative_to(tmp_path).as_posix())
     scene.visual_qc = VisualQCReport(
         first_frame=frame_paths[0],
-        middle_frame=frame_paths[1],
-        last_frame=frame_paths[2],
+        quarter_frame=frame_paths[1],
+        middle_frame=frame_paths[2],
+        three_quarter_frame=frame_paths[3],
+        last_frame=frame_paths[4],
     )
 
     vision = FakeVision(
@@ -105,7 +113,7 @@ async def test_inspect_scene_scores_real_frame_files_without_ffmpeg(tmp_path: Pa
     assert report.score == 94
     assert report.model_id == "vision-test-model"
     assert len(vision.calls) == 1
-    assert len(vision.calls[0][0]) == 3
+    assert len(vision.calls[0][0]) == 5
 
 
 @pytest.mark.asyncio

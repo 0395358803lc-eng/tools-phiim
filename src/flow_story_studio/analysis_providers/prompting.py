@@ -161,6 +161,14 @@ architecture, layout, materials, objects, palette and spatial anchors. Keep chro
 facts exact. Output JSON only."""
 
 
+def _physical_state_payload(state: Any) -> dict[str, Any]:
+    data = state.model_dump(mode="json")
+    # Boundary notes may mention other scene IDs; they are orchestration metadata,
+    # not physical state and must not contaminate the requested-scene protocol.
+    data["notes"] = ""
+    return data
+
+
 def scene_prompt(
     world: dict[str, Any],
     scenes: list[Any],
@@ -198,6 +206,12 @@ def scene_prompt(
             "source_text": scene.source_text,
             "current_characters": scene.characters,
             "current_location_id": scene.location_id,
+            "source_dialogues": [
+                item.model_dump(mode="json") for item in scene.dialogues
+            ],
+            "source_voiceover": scene.voiceover,
+            "source_start_state": _physical_state_payload(scene.start_state),
+            "source_end_state": _physical_state_payload(scene.end_state),
         }
         for scene in scenes
     ]
@@ -211,8 +225,22 @@ LOCKED WORLD (compact, IDs are immutable):
 PREVIOUS APPROVED END STATE (continuity reference only):
 {json.dumps(previous_end_state, ensure_ascii=False)}
 
-SCENES TO RETURN (return every supplied ID exactly once and no other IDs):
+SCENE SOURCE PAYLOAD (return every supplied ID exactly once and no other IDs):
 {json.dumps(scene_payload, ensure_ascii=False)}
+
+AUTHORITY ORDER (never reverse it):
+1. Source screenplay facts and supplied source_dialogues/source_voiceover.
+2. Locked canonical world identities and locations.
+3. Previous approved end state for a true direct continuation.
+4. Your proposal/enrichment.
+
+You are an enrichment engine, not the owner of film truth.
+Never add, remove, reassign or paraphrase dialogue.
+Never add a visible character, prop or location unless the supplied source beat requires it.
+For direct continuation, return start_state identical to PREVIOUS APPROVED END STATE.
+The application will verify and deterministically overwrite it.
+For a cut/re-anchor, use the supplied source_start_state as the authoritative physical entry state.
+Do not invent continuity merely to make adjacent shots match.
 
 Return one JSON object with a scenes array. Every scene must contain id, summary, characters,
 location_id, action, camera, lighting, atmosphere, voiceover, dialogues, start_state and end_state.
@@ -234,7 +262,16 @@ the source beat changes.
 Identity, wardrobe, props, architecture, screen direction, palette, weather and lighting may change
 only when source_text or an explicit scene context supports the change. Describe filmable
 action only.
-Preserve the source meaning and chronology exactly. Output JSON only."""
+DIALOGUE/AUDIO RULE: source_dialogues and source_voiceover are immutable. Preserve speaker,
+delivery channel and text exactly. If no speech is supplied, return no invented speech.
+
+STATE RULE: treat start_state/end_state as physical-state proposals constrained by source. Do not
+smuggle new characters, props, wardrobe, weather or locations through nested state fields.
+
+Preserve the source meaning and chronology exactly. Output JSON only.
+
+SCENES TO RETURN:
+{json.dumps([scene.id for scene in scenes], ensure_ascii=False)}"""
 
 
 def analysis_prompt(request: Any, draft: Project) -> str:

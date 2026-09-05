@@ -77,6 +77,25 @@ def make_visual_prompt(
     )
 
 
+def _audio_bible_text(scene: Scene) -> str:
+    raw = scene.orchestration.get("audio_locks", {})
+    if not isinstance(raw, dict):
+        return "Use canonical project audio identity."
+    lines: list[str] = []
+    voices = raw.get("voice_locks", {})
+    if isinstance(voices, dict):
+        lines.extend(str(value) for value in voices.values())
+    ambience = raw.get("ambience_lock", "")
+    if ambience:
+        lines.append(str(ambience))
+    dialogues = raw.get("dialogue_locks", {})
+    if isinstance(dialogues, dict):
+        lines.extend(f"{key}: {value}" for key, value in dialogues.items())
+    if raw.get("no_unrequested_speech"):
+        lines.append("No unrequested speech, narration, or vocalization.")
+    return "\n".join(lines) or "Use canonical project audio identity."
+
+
 def make_flow_prompt(
     scene: Scene,
     *,
@@ -152,6 +171,9 @@ Use the exact source-grounded speaker and words above. Do not paraphrase, invent
 change speaker identity, or turn on-screen text/stage direction into spoken audio. When a line is
 phone/recorded/off-screen by scene context, preserve that delivery without making the speaker
 visible.
+
+CANONICAL AUDIO BIBLE LOCKS:
+{_audio_bible_text(scene)}
 
 Visual style:
 {visual_style}

@@ -31,11 +31,19 @@ def make_project(tmp_path):
 
     frame_dir = tmp_path / "frames"
     frame_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("first.jpg", "middle.jpg", "last.jpg"):
+    for name in (
+        "first.jpg",
+        "quarter.jpg",
+        "middle.jpg",
+        "three-quarter.jpg",
+        "last.jpg",
+    ):
         (frame_dir / name).write_bytes(b"image")
     scene.visual_qc = VisualQCReport(
         first_frame="frames/first.jpg",
+        quarter_frame="frames/quarter.jpg",
         middle_frame="frames/middle.jpg",
+        three_quarter_frame="frames/three-quarter.jpg",
         last_frame="frames/last.jpg",
     )
     return project, scene
@@ -64,7 +72,7 @@ async def test_scene_visual_qc_passes_with_observed_frames(tmp_path):
     assert report.score == 93
     assert report.model_id == "vision-test"
     assert len(vision.calls) == 1
-    assert len(vision.calls[0][0]) >= 3
+    assert len(vision.calls[0][0]) >= 5
 
 
 async def test_scene_visual_qc_fails_closed_when_video_is_missing(tmp_path):

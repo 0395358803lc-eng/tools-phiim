@@ -5,6 +5,7 @@ All downstream consumers must use this module instead of trusting mutable status
 
 from __future__ import annotations
 
+from .film.state_delta import continuity_state_hash
 from .models import Project, Scene
 from .scene_contracts import verify_scene_contract
 
@@ -30,6 +31,9 @@ def scene_production_score_floor(scene: Scene) -> int:
             scene.visual_qc.composition_consistency,
         ]
     )
+
+    if scene.audio_qc.status != "Pending":
+        scores.append(scene.audio_qc.score)
 
     if scene.visual_plan.dependency_mode == "direct":
         scores.extend(
@@ -74,6 +78,13 @@ def scene_production_blockers(
         reasons.append("scene is not AI continuity locked")
     if not verify_scene_contract(scene):
         reasons.append("scene packet contract hash is missing or stale")
+    if scene.acceptance.status == "Accepted":
+        if scene.accepted_end_state is None:
+            reasons.append("accepted end-state evidence is missing")
+        elif not scene.accepted_state_hash:
+            reasons.append("accepted end-state hash is missing")
+        elif scene.accepted_state_hash != continuity_state_hash(scene.accepted_end_state):
+            reasons.append("accepted end-state hash is stale")
     if require_result and not scene.result_file:
         reasons.append("rendered video file is missing")
 
@@ -109,14 +120,28 @@ def scene_production_blockers(
         reasons.append("visual component below threshold: " + ", ".join(visual_low))
 
     if project.settings.provider == "google-flow":
+        if scene.audio_qc.status != "Passed":
+            reasons.append(f"audio QC is {scene.audio_qc.status}")
+        if not scene.audio_qc.audio_present:
+            reasons.append("rendered scene audio stream is missing")
+        if scene.audio_qc.score < threshold:
+            reasons.append(
+                f"audio QC score {scene.audio_qc.score} is below {threshold}"
+            )
+        if scene.audio_qc.clipping_detected:
+            reasons.append("audio true peak exceeds canonical limit")
+        if not scene.audio_qc.model_id:
+            reasons.append("audio QC evidence is missing")
         if not all(
             (
                 scene.visual_qc.first_frame,
+                scene.visual_qc.quarter_frame,
                 scene.visual_qc.middle_frame,
+                scene.visual_qc.three_quarter_frame,
                 scene.visual_qc.last_frame,
             )
         ):
-            reasons.append("visual QC boundary evidence is incomplete")
+            reasons.append("visual QC five-frame evidence is incomplete")
         if not scene.visual_qc.model_id:
             reasons.append("visual QC model evidence is missing")
 

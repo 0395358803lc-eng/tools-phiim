@@ -13,6 +13,8 @@ from collections import Counter
 from copy import deepcopy
 
 from ..analysis_providers.audio_finalization import finalize_audio
+from ..film import orchestrator as film_orchestrator
+from ..film.validation import assert_project_hard_constraints
 from ..models import (
     AnalyzeRequest,
     Character,
@@ -843,6 +845,7 @@ def analyze_story(request: AnalyzeRequest) -> Project:
     )
     project = check_project(project, auto_fix=request.settings.auto_continuity)
     project = finalize_audio(project)
+    project = film_orchestrator.prepare(project)
     project = build_visual_bible(project)
     location_by_id = {item.id: item for item in project.locations}
     for index, scene in enumerate(project.scenes):
@@ -866,4 +869,6 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             all_characters=project.characters,
             previous_scene_id=project.scenes[index - 1].id if index else None,
         )
+    project = film_orchestrator.finalize(project)
+    assert_project_hard_constraints(project)
     return seal_project_contracts(project)

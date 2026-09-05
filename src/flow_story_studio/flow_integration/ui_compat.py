@@ -72,8 +72,8 @@ def apply_flow_ui_compatibility(self) -> None:
                     raise RuntimeError("Flow prompt editor did not retain the complete prompt")
             except RuntimeError:
                 raise
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Flow prompt-editor compatibility path failed: %s", exc)
             await original_set_prompt(ui, prompt)
 
         set_prompt._studio_compat = True  # type: ignore[attr-defined]
@@ -327,8 +327,8 @@ def apply_flow_ui_compatibility(self) -> None:
             tabs_open = await video_tab.is_visible(timeout=300) and await image_tab.is_visible(
                 timeout=300
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Flow media-tab visibility probe failed: %s", exc)
         if not tabs_open:
             trigger = ui.page.locator('button:has-text("Video ·")').first
             if not await trigger.is_visible(timeout=500):
@@ -341,7 +341,8 @@ def apply_flow_ui_compatibility(self) -> None:
                         if any(name in label for name in ("omni", "veo", "nano", "imagen")):
                             trigger = candidate
                             break
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Flow media-settings trigger candidate failed: %s", exc)
                         continue
                 if trigger is None:
                     raise RuntimeError("Could not find the Flow media settings button")
@@ -425,7 +426,8 @@ def apply_flow_ui_compatibility(self) -> None:
                     await ui.page.wait_for_timeout(400)
                     opened_nested_menu = True
                     break
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Flow nested model trigger candidate failed: %s", exc)
                 continue
 
         if normalized == DEFAULT_FLOW_VIDEO_MODEL:
@@ -459,14 +461,17 @@ def apply_flow_ui_compatibility(self) -> None:
                         await option.click(timeout=1500)
                         await ui.page.wait_for_timeout(400)
                         return
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "Flow model option candidate %r failed: %s", candidate, exc
+                    )
                     continue
         diagnostics = self.data_root / "diagnostics" / "flow-model-menu.png"
         diagnostics.parent.mkdir(parents=True, exist_ok=True)
         try:
             await ui.page.screenshot(path=str(diagnostics))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Flow diagnostics screenshot failed: %s", exc)
         try:
             labels = [
                 text.strip()

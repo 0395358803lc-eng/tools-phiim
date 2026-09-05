@@ -9,6 +9,7 @@ import pytest
 
 from flow_story_studio.analysis_providers.xkiro import XKiroClient
 from flow_story_studio.engines.analyzer import analyze_story
+from flow_story_studio.film.state_delta import continuity_state_hash
 from flow_story_studio.flow_media import extract_visual_frames, ffmpeg_path
 from flow_story_studio.models import AnalyzeRequest, ProductionAcceptance, VideoSettings
 from flow_story_studio.providers.base import RenderResult
@@ -284,3 +285,27 @@ async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Pat
     assert reference.status == "approved"
     assert reference.approved_reference
     assert reference.approved_reference in reference.reference_images
+
+
+def test_direct_dependency_blocks_stale_start_state_hash(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = analyze_story(AnalyzeRequest(name="accepted-state-hash", original_text=SCRIPT))
+    if len(project.scenes) < 2:
+        pytest.skip("Need two production scenes")
+    previous, current = project.scenes[:2]
+    current.visual_plan.dependency_mode = "direct"
+    current.location_id = previous.location_id
+    current.start_state = previous.end_state.model_copy(deep=True)
+
+    previous.accepted_end_state = previous.end_state.model_copy(deep=True)
+    previous.accepted_state_hash = continuity_state_hash(previous.accepted_end_state)
+    current.start_state.notes = "stale mutation after accepted state commit"
+
+    class FakeFlow:
+        configured = True
+
+    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    queue._is_finally_accepted = lambda _project, _scene: True  # type: ignore[method-assign]
+
+    reason = queue._dependency_block_reason(project, current)
+    assert "không khớp accepted state" in reason

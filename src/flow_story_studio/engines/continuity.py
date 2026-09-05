@@ -39,6 +39,55 @@ def is_direct_continuation(previous: Scene | None, current: Scene) -> bool:
     return previous_flashback == current_flashback
 
 
+def is_direct_frame_anchor(previous: Scene | None, current: Scene) -> bool:
+    """Return True only when the next scene can reuse the exact accepted final frame."""
+    if previous is None or not is_direct_continuation(previous, current):
+        return False
+    before = previous.end_state
+    after = current.start_state
+    before_chars = set(previous.characters)
+    after_chars = set(current.characters)
+    before_props = set(before.prop_positions)
+    after_props = set(after.prop_positions)
+    return before_chars == after_chars and before_props == after_props
+
+
+def sanitize_visual_state_scope(project: Project) -> Project:
+    """Remove stale nested visual entities before dependency classification."""
+    result = deepcopy(project)
+    valid_props = {item.id for item in result.props}
+    for scene in result.scenes:
+        visible = set(scene.characters)
+        for state in (scene.start_state, scene.end_state):
+            state.character_positions = {
+                key: value
+                for key, value in state.character_positions.items()
+                if key in visible
+            }
+            state.character_wardrobe = {
+                key: value
+                for key, value in state.character_wardrobe.items()
+                if key in visible
+            }
+            state.prop_positions = {
+                key: value
+                for key, value in state.prop_positions.items()
+                if key in valid_props
+            }
+    return result
+
+
+def enforce_frame_anchor_policy(project: Project) -> Project:
+    """Copy complete entry state only when the visible inventory can be anchored."""
+    result = sanitize_visual_state_scope(project)
+    previous: Scene | None = None
+    for scene in result.scenes:
+        if is_direct_frame_anchor(previous, scene):
+            scene.start_state = deepcopy(previous.end_state)
+        previous = scene
+    return result
+
+
 def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> list[str]:
     warnings: list[str] = []
     character_ids = {item.id for item in project.characters}
@@ -80,7 +129,7 @@ def check_project(project: Project, auto_fix: bool = False) -> Project:
             or warning.startswith("xKiro ")
         ]
         scene.order = index + 1
-        if auto_fix and is_direct_continuation(previous, scene):
+        if auto_fix and is_direct_frame_anchor(previous, scene):
             scene.start_state = deepcopy(previous.end_state)
         current_warnings = scene_warnings(previous, scene, result)
         scene.warnings = retained + current_warnings

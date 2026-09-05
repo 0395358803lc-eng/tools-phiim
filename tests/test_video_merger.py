@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from flow_story_studio.film.state_delta import continuity_state_hash
 from flow_story_studio.main import create_app
 from flow_story_studio.models import (
     AnalyzeRequest,
@@ -59,6 +60,8 @@ def completed_project(storage: ProjectStorage, data_root: Path):
         scene.result_file = clip.relative_to(data_root).as_posix()
         scene.render_provider = project.settings.provider
         scene.render_model = project.settings.video_model
+        scene.accepted_end_state = scene.end_state.model_copy(deep=True)
+        scene.accepted_state_hash = continuity_state_hash(scene.accepted_end_state)
     return storage.save(project)
 
 
@@ -81,6 +84,11 @@ def test_merger_uses_storyboard_order_and_atomic_output(tmp_path: Path, monkeypa
         return 0, ""
 
     monkeypatch.setattr(merger, "_execute", fake_execute)
+
+    async def no_near_duplicates(_ffmpeg, _clips, _scenes):
+        return []
+
+    monkeypatch.setattr(merger, "_near_duplicate_clip_hashes", no_near_duplicates)
     progress_values: list[int] = []
     result = asyncio.run(merger.merge(project, progress=progress_values.append))
 
@@ -218,3 +226,89 @@ def test_merger_rejects_low_visual_component_even_when_acceptance_flag_is_accept
 
     with pytest.raises(VideoMergeError, match="chưa có tệp video hoàn chỉnh"):
         VideoMerger(tmp_path).clips_for(project)
+
+
+def test_merger_rejects_exact_duplicate_scene_files(tmp_path: Path) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    if len(project.scenes) < 2:
+        pytest.skip("Need at least two scenes")
+    first = tmp_path / project.scenes[0].result_file
+    second = tmp_path / project.scenes[1].result_file
+    second.write_bytes(first.read_bytes())
+
+    with pytest.raises(VideoMergeError, match="trùng byte-for-byte"):
+        VideoMerger(tmp_path).clips_for(project)
+
+
+def test_perceptual_signature_match_is_conservative() -> None:
+    base = [(0x0F0F0F0F0F0F0F0F, 100)] * 3
+    close = [(0x0F0F0F0F0F0F0F0E, 103)] * 3
+    different_structure = [(0xF0F0F0F0F0F0F0F0, 100)] * 3
+    different_luma = [(0x0F0F0F0F0F0F0F0F, 130)] * 3
+
+    assert VideoMerger._visual_signatures_match(base, close)
+    assert not VideoMerger._visual_signatures_match(base, different_structure)
+    assert not VideoMerger._visual_signatures_match(base, different_luma)
+
+
+def test_merger_applies_audio_bible_normalization_when_all_clips_have_audio(
+    tmp_path: Path, monkeypatch
+) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    merger = VideoMerger(tmp_path)
+    monkeypatch.setattr(merger, "ffmpeg_path", lambda: "ffmpeg")
+
+    async def no_near_duplicates(_ffmpeg, _clips, _scenes):
+        return []
+
+    async def all_have_audio(_ffmpeg, _clips):
+        return True
+
+    captured: dict[str, list[str]] = {}
+
+    async def fake_execute(
+        command: list[str], progress=None, expected_duration=0.0
+    ) -> tuple[int, str]:
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"joined-video")
+        return 0, ""
+
+    monkeypatch.setattr(merger, "_near_duplicate_clip_hashes", no_near_duplicates)
+    monkeypatch.setattr(merger, "_all_clips_have_audio", all_have_audio)
+    monkeypatch.setattr(merger, "_execute", fake_execute)
+
+    asyncio.run(merger.merge(project))
+
+    command = captured["command"]
+    assert "-af" in command
+    audio_filter = command[command.index("-af") + 1]
+    assert "loudnorm=I=-16.0:TP=-1.0:LRA=11" == audio_filter
+    assert command[command.index("-ar") + 1] == "48000"
+    assert command[command.index("-ac") + 1] == "2"
+
+
+def test_google_flow_final_merge_fails_closed_when_audio_stream_disappears(
+    tmp_path: Path, monkeypatch
+) -> None:
+    storage = ProjectStorage(tmp_path / "projects")
+    project = completed_project(storage, tmp_path)
+    project.settings.provider = "google-flow"
+    merger = VideoMerger(tmp_path)
+    clips = [tmp_path / "clip-a.mp4", tmp_path / "clip-b.mp4"]
+
+    monkeypatch.setattr(merger, "ffmpeg_path", lambda: "ffmpeg")
+    monkeypatch.setattr(merger, "clips_for", lambda _project: clips)
+
+    async def no_near_duplicates(_ffmpeg, _clips, _scenes):
+        return []
+
+    async def missing_audio(_ffmpeg, _clips):
+        return False
+
+    monkeypatch.setattr(merger, "_near_duplicate_clip_hashes", no_near_duplicates)
+    monkeypatch.setattr(merger, "_all_clips_have_audio", missing_audio)
+
+    with pytest.raises(VideoMergeError, match="mất audio stream"):
+        asyncio.run(merger.merge(project))

@@ -97,12 +97,27 @@ def main() -> None:
                         f"requestfailed:{request.method}:{request.url}:{request.failure}"
                     ),
                 )
+                page.locator("#newProjectModal").wait_for(state="visible", timeout=10_000)
+                page.locator("#analyzeSubmit").wait_for(state="visible", timeout=10_000)
+                page.locator("#workspacePath").wait_for(state="visible", timeout=10_000)
                 page.locator("#projectNameInput").fill("Production E2E")
                 page.locator("#storyInput").fill(TEXT)
                 page.locator("#analysisProviderInput").select_option("offline")
                 page.locator("#providerInput").evaluate("function(el) { el.value = 'mock'; }")
+                payload_before_submit = page.evaluate("projectPayload()")
+                if payload_before_submit.get("name") != "Production E2E":
+                    raise AssertionError(
+                        "Project form mutated before submit: "
+                        + json.dumps(payload_before_submit, ensure_ascii=False)
+                    )
                 if not page.locator("#newProjectForm").evaluate("(el) => el.reportValidity()"):
                     raise AssertionError("Browser E2E analysis form is unexpectedly invalid")
+                submitted_payload = page.evaluate("projectPayload()")
+                if submitted_payload.get("name") != "Production E2E":
+                    raise AssertionError(
+                        "Browser payload lost project name before submit: "
+                        + json.dumps(submitted_payload, ensure_ascii=False)
+                    )
                 with page.expect_response(
                     lambda response: (
                         "/api/analysis/jobs?" in response.url
@@ -112,6 +127,12 @@ def main() -> None:
                 ) as response_info:
                     page.locator("#analyzeSubmit").click()
                 started = response_info.value
+                submitted_payload = started.request.post_data_json
+                if submitted_payload.get("name") != "Production E2E":
+                    raise AssertionError(
+                        "Analysis request mutated project name: "
+                        + json.dumps(submitted_payload, ensure_ascii=False)
+                    )
                 if started.status != 202:
                     raise AssertionError(
                         f"Analysis POST failed with HTTP {started.status}: {started.text()}"
@@ -136,6 +157,7 @@ def main() -> None:
                         "analysis_log": page.locator("#analysisLogEntries").inner_text(),
                         "toast": page.locator("#toast").inner_text(),
                         "browser_messages": browser_messages,
+                        "submitted_payload": submitted_payload,
                     }
                     raise AssertionError(
                         "Backend completed but UI did not hydrate: "
