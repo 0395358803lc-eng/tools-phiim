@@ -34,6 +34,24 @@ jobs:
         run: python -m ruff check .
       - name: JavaScript syntax
         run: node --check static/app.js
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Path . -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error "$($_.FullName): $($errors -join '; ')"
+            }
+          }
+          if ($failed) { exit 1 }
       - name: Tests and coverage
         run: python -m pytest --cov=flow_story_studio --cov-report=term-missing --cov-report=xml
       - name: Browser E2E
