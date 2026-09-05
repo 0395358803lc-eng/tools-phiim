@@ -312,8 +312,8 @@ function renderQueue() {
 }
 
 function finalVideoReady() {
-  return Boolean(state.project?.scenes?.length)
-    && state.project.scenes.every((scene) => scene.status === "Accepted" && scene.result_file);
+  if (!state.project?.scenes?.length) return false;
+  return ["Ready", "Completed"].includes(state.project.final_video?.status || "NotReady");
 }
 
 function renderFinalVideo() {
