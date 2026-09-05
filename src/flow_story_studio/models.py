@@ -134,6 +134,7 @@ class VisualQCReport(StrictModel):
     prop_consistency: int = Field(default=0, ge=0, le=100)
     wardrobe_consistency: int = Field(default=0, ge=0, le=100)
     lighting_consistency: int = Field(default=0, ge=0, le=100)
+    action_consistency: int = Field(default=0, ge=0, le=100)
     composition_consistency: int = Field(default=0, ge=0, le=100)
     first_frame: str = ""
     middle_frame: str = ""
