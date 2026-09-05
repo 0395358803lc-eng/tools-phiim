@@ -26,6 +26,6 @@ if ($LASTEXITCODE -ne 0) { throw "Project dependency install failed" }
 if ($LASTEXITCODE -ne 0) { throw "Playwright Chromium install failed" }
 
 Write-Host "Setup completed."
-Write-Host "Google Flow transport: embedded Flow CLI."
+Write-Host "Google Flow video transport: gflow-cli 0.68.0 @ 438f5cf (flow.google.com T2V/I2V)."
 Write-Host "Open TH Media, connect the saved Google Flow session, then verify it before rendering."
 Write-Host "Run .\start.ps1 to launch TH Media."

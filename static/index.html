@@ -230,7 +230,8 @@
         <div class="credential-overview">
           <div class="connection-line" id="flowConnection"><i></i><span>Đang kiểm tra thông tin đã lưu...</span></div>
           <button class="secondary-btn" type="button" id="verifyFlowBtn">Kiểm tra</button>
-          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Kết nối Flow CLI</button>
+          <button class="secondary-btn" type="button" id="openFlowBrowserBtn">Mở Chrome đăng nhập Flow</button>
+          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Nhập cookie dự phòng</button>
         </div>
         <div class="credential-editor hidden" id="flowCredentialEditor">
           <label><span>Phiên Flow CLI (cookies.json hoặc Cookie header)</span><textarea id="flowCookieInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Dán cookie hoặc chọn cookies.json để xác thực Flow CLI"></textarea></label>
@@ -240,7 +241,7 @@
             <button class="ghost-btn" type="button" id="cancelFlowEditBtn">Hủy</button>
             <button class="danger-ghost-btn" type="button" id="disconnectFlowBtn">Xóa phiên Flow CLI</button>
           </div>
-          <p class="helper">Thông tin xác thực chỉ dùng cho Flow CLI tích hợp và được lưu mã hóa trên máy.</p>
+          <p class="helper">Cookie là phương án dự phòng. Ưu tiên Chrome Flow profile riêng/CDP để dùng phiên đăng nhập thật mà không đụng Chrome chính.</p>
         </div>
         <p class="helper">Render, reference image và recovery đều dùng Flow CLI tích hợp. Không nhập mật khẩu Google vào ứng dụng.</p>
       </section>

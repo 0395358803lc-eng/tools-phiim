@@ -3,7 +3,10 @@
 from pathlib import Path
 
 from flow_story_studio.flow_integration import FlowCLIIntegration
-from flow_story_studio.flow_integration.browser import can_attach_existing_chrome
+from flow_story_studio.flow_integration.browser import (
+    can_attach_existing_chrome,
+    is_flow_cookie_domain,
+)
 from flow_story_studio.flow_integration.catalog import VIDEO_MODELS
 from flow_story_studio.flow_integration.errors import FlowIntegrationError, RenderCheckpoint
 
@@ -33,6 +36,13 @@ class TestErrors:
 
 
 class TestBrowser:
+    def test_flow_cookie_domain_includes_labs_google(self) -> None:
+        assert is_flow_cookie_domain("labs.google")
+        assert is_flow_cookie_domain(".labs.google")
+        assert is_flow_cookie_domain("flow.google.com")
+        assert is_flow_cookie_domain(".google.com")
+        assert not is_flow_cookie_domain("googleusercontent.com")
+
     def test_can_attach_existing_chrome_returns_false_for_missing_file(
         self, tmp_path: Path
     ) -> None:
@@ -120,3 +130,39 @@ class TestIntegrationFacade:
         assert hasattr(integration, "timeout")
         assert hasattr(integration, "configured")
         assert hasattr(integration, "vault")
+
+
+def test_integration_falls_back_to_consent_enabled_user_chrome(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from flow_story_studio.flow_integration import integration as integration_module
+
+    local_app_data = tmp_path / "Local"
+    user_port = (
+        local_app_data
+        / "Google"
+        / "Chrome"
+        / "User Data"
+        / "DevToolsActivePort"
+    )
+    user_port.parent.mkdir(parents=True, exist_ok=True)
+    user_port.write_text("9222\n/devtools/browser/test\n", encoding="utf-8")
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
+    monkeypatch.delenv("FLOW_CHROME_DEVTOOLS_ACTIVE_PORT", raising=False)
+
+    expected = user_port.resolve()
+
+    def fake_can_attach(path: Path) -> bool:
+        return Path(path).resolve() == expected
+
+    monkeypatch.setattr(
+        integration_module,
+        "can_attach_existing_chrome",
+        fake_can_attach,
+    )
+
+    integration = FlowCLIIntegration(tmp_path / "data")
+
+    assert integration._chrome_port_file == expected

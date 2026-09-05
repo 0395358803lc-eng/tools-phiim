@@ -17,3 +17,7 @@ def _add_development_flow_cli_path() -> None:
 def _flow_cli_available() -> bool:
     _add_development_flow_cli_path()
     return importlib.util.find_spec("flow_cli") is not None
+
+
+def _gflow_cli_available() -> bool:
+    return importlib.util.find_spec("gflow_cli") is not None

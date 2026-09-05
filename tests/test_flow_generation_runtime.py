@@ -128,11 +128,15 @@ async def test_generate_with_existing_chrome_restores_media_type(
 async def test_generate_persists_job_identity_and_checkpoints(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     project = analyze_story(AnalyzeRequest(name="flow lifecycle", original_text=SCRIPT))
     project.settings.provider = "google-flow"
     scene = project.scenes[0]
     flow = FlowCLIIntegration(tmp_path)
     monkeypatch.setattr(flow.vault, "load", lambda: ({"SID": "valid"}, None))
+    monkeypatch.setattr(
+        generation_module, "can_attach_existing_chrome", lambda _p: False
+    )
 
     class FakeClient:
         async def create_project(self, name, media_type):
@@ -197,6 +201,7 @@ async def _async_value(value):
 async def test_reference_image_generation_downloads_canonical_asset(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     from flow_cli import _downloader
 
     flow = FlowCLIIntegration(tmp_path)
@@ -232,6 +237,7 @@ async def test_reference_image_generation_downloads_canonical_asset(
 async def test_reference_image_generation_fails_closed_without_downloadable_image(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     flow = FlowCLIIntegration(tmp_path)
     flow._save_cookies({"SID": "valid"}, None)
     monkeypatch.setattr(generation_module, "can_attach_existing_chrome", lambda _p: False)
@@ -244,3 +250,83 @@ async def test_reference_image_generation_fails_closed_without_downloadable_imag
 
     with pytest.raises(Exception, match="reference image"):
         await flow.generate_reference_image("project-1", "CHAR_001", "reference")
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_live_project_and_browser_polling_when_cdp_ready(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
+    project = analyze_story(AnalyzeRequest(name="live flow", original_text=SCRIPT))
+    project.settings.provider = "google-flow"
+    scene = project.scenes[0]
+    flow = FlowCLIIntegration(tmp_path)
+    monkeypatch.setattr(flow.vault, "load", lambda: ({}, None))
+    monkeypatch.setattr(
+        generation_module, "can_attach_existing_chrome", lambda _p: True
+    )
+
+    ensured: list[str] = []
+
+    async def fake_ensure(_port_file):
+        ensured.append("project")
+        return "live-project"
+
+    monkeypatch.setattr(generation_module, "ensure_live_flow_project", fake_ensure)
+
+    client_project_ids: list[str | None] = []
+
+    class FakeClient:
+        async def create_project(self, *_args, **_kwargs):
+            raise AssertionError("legacy create_project must not run in CDP mode")
+
+        async def wait_for_video(self, *_args, **_kwargs):
+            raise AssertionError("legacy wait_for_video must not run in CDP mode")
+
+    client = FakeClient()
+
+    def fake_client(_cookies, project_id=None):
+        client_project_ids.append(project_id)
+        return client
+
+    monkeypatch.setattr(flow, "_client", fake_client)
+
+    job = SimpleNamespace(
+        job_id="live-job",
+        is_success=False,
+        workflow_id="workflow-live",
+        media_id="media-live",
+        resource_name="resource-live",
+        status="RUNNING",
+    )
+
+    async def fake_generate_video(_self, _client, **_kwargs):
+        return job
+
+    monkeypatch.setattr(generation_module, "_generate_video", fake_generate_video)
+
+    async def fake_wait(_self, project_id, submitted, output, **kwargs):
+        assert project_id == "live-project"
+        assert submitted is job
+        assert kwargs["timeout"] == flow.timeout
+        output.mkdir(parents=True, exist_ok=True)
+        video = output / "live.mp4"
+        video.write_bytes(b"0000ftyp" + b"x" * 2048)
+        return [video]
+
+    monkeypatch.setattr(generation_module, "wait_for_browser_video", fake_wait)
+    monkeypatch.setattr(
+        flow,
+        "_extract_last_frame",
+        lambda *_args, **_kwargs: _async_value("frames/live-last.jpg"),
+    )
+
+    result = await flow.generate(project, scene)
+
+    assert ensured == ["project"]
+    assert client_project_ids == ["live-project"]
+    assert project.flow_project_id == "live-project"
+    assert scene.upstream_project_id == "live-project"
+    assert scene.provider_job_id == "live-job"
+    assert job.status == "SUCCEEDED"
+    assert result.result_file.endswith("/live.mp4")

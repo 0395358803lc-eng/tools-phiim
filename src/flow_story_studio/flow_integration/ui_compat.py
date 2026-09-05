@@ -28,6 +28,67 @@ def apply_flow_ui_compatibility(self) -> None:
         model_aliases(DEFAULT_FLOW_VIDEO_MODEL)
     )
 
+    # Live Flow (Sep 2026): ProseMirror prompt box + Angular Material
+    # settings/model controls. Keep legacy selectors as fallbacks.
+    flow_ui.PROMPT_EDITOR_SELECTOR = (
+        'div.ProseMirror[contenteditable="true"]'
+    )
+    flow_ui.VIDEO_SETTINGS_SELECTOR = (
+        'button[aria-label="Settings trigger"], button:has-text("Video")'
+    )
+    flow_ui.MODEL_READ_SELECTORS = (
+        'button[aria-label="Select model family"]',
+        *tuple(flow_ui.MODEL_READ_SELECTORS),
+    )
+
+    if not getattr(flow_ui.FlowUI.goto_flow, "_studio_live_flow", False):
+        async def goto_flow(ui: object, timeout: int = 30000) -> None:
+            await ui.page.goto(
+                "https://flow.google.com/",
+                wait_until="domcontentloaded",
+                timeout=timeout,
+            )
+            await ui.page.wait_for_timeout(1200)
+            for selector in flow_ui.DISMISS_SELECTORS:
+                try:
+                    button = ui.page.locator(selector).first
+                    if await button.is_visible(timeout=500):
+                        await button.click(timeout=1000)
+                        await ui.page.wait_for_timeout(200)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Flow live dismiss selector failed: %s", exc)
+
+        goto_flow._studio_live_flow = True  # type: ignore[attr-defined]
+        flow_ui.FlowUI.goto_flow = goto_flow
+
+    if not getattr(flow_ui.FlowUI.ensure_project, "_studio_live_flow", False):
+        async def ensure_project(ui: object, project_id: str | None = None) -> str:
+            if project_id:
+                await ui.page.goto(
+                    f"https://flow.google.com/project/{project_id}",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                await ui.page.wait_for_timeout(1200)
+                if f"/project/{project_id}" not in ui.page.url:
+                    raise RuntimeError(
+                        "Flow did not navigate to the requested live project: "
+                        f"{ui.page.url}"
+                    )
+                return project_id
+            url = ui.page.url
+            if "/project/" in url:
+                return (
+                    url.split("/project/", 1)[1]
+                    .split("/", 1)[0]
+                    .split("?", 1)[0]
+                    .split("#", 1)[0]
+                )
+            return ""
+
+        ensure_project._studio_live_flow = True  # type: ignore[attr-defined]
+        flow_ui.FlowUI.ensure_project = ensure_project
+
     current = tuple(flow_ui.SELECTED_OPTION_TEMPLATES)
     additions = (
         '[role="tab"][aria-selected="true"]:has-text("{label}")',
@@ -56,16 +117,29 @@ def apply_flow_ui_compatibility(self) -> None:
         async def set_prompt(ui: object, prompt: str) -> None:
             editor = ui.page.locator(flow_ui.PROMPT_EDITOR_SELECTOR).first
             try:
-                if await editor.is_visible(timeout=2000):
-                    await editor.fill(prompt, timeout=5000)
-                    await ui.page.wait_for_timeout(300)
+                # Flow mounts the ProseMirror editor shortly after project navigation.
+                # Playwright's is_visible() is an immediate probe here, so poll explicitly.
+                ready = False
+                for _ in range(20):
+                    try:
+                        if await editor.count() and await editor.is_visible():
+                            ready = True
+                            break
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("Flow prompt-editor readiness probe failed: %s", exc)
+                    await ui.page.wait_for_timeout(250)
+                if ready:
+                    await editor.click(timeout=1500)
+                    await ui.page.keyboard.press("Control+A")
+                    await ui.page.keyboard.press("Backspace")
+                    await ui.page.keyboard.insert_text(prompt)
+                    await ui.page.wait_for_timeout(400)
                     text = (await editor.inner_text(timeout=2000)).strip()
                     if prompt[:20] in text and prompt[-20:] in text:
                         return
-                    await editor.click(timeout=1500)
-                    await ui.page.keyboard.press("Control+A")
-                    await ui.page.keyboard.insert_text(prompt)
-                    await ui.page.wait_for_timeout(300)
+                    # Fallback for older contenteditable implementations.
+                    await editor.fill(prompt, timeout=5000)
+                    await ui.page.wait_for_timeout(400)
                     text = (await editor.inner_text(timeout=2000)).strip()
                     if prompt[:20] in text and prompt[-20:] in text:
                         return
@@ -81,22 +155,40 @@ def apply_flow_ui_compatibility(self) -> None:
 
     async def agent_settings_open(ui: object) -> bool:
         try:
+            live_video = ui.page.locator('[role="radio"]:has-text("Video")').first
+            live_image = ui.page.locator('[role="radio"]:has-text("Image")').first
+            if await live_video.is_visible(timeout=300) and await live_image.is_visible(
+                timeout=300
+            ):
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Flow live settings visibility probe failed: %s", exc)
+        try:
             settings_label = ui.page.get_by_text("Agent settings", exact=True).first
             if await settings_label.is_visible(timeout=300):
                 return True
         except Exception as exc:  # noqa: BLE001
             logger.debug("Flow Agent settings label probe failed: %s", exc)
-        try:
-            button = ui.page.locator('button[aria-label="Settings"]').first
-            if not await button.is_visible(timeout=700):
-                return False
-            await button.click(timeout=1500)
-            await ui.page.wait_for_timeout(500)
-            return await ui.page.get_by_text("Agent settings", exact=True).first.is_visible(
-                timeout=1000
-            )
-        except Exception:  # noqa: BLE001
-            return False
+        for selector in (
+            'button[aria-label="Settings trigger"]',
+            'button[aria-label="Settings"]',
+        ):
+            try:
+                button = ui.page.locator(selector).first
+                if not await button.is_visible(timeout=500):
+                    continue
+                await button.click(timeout=1500)
+                await ui.page.wait_for_timeout(400)
+                live_video = ui.page.locator('[role="radio"]:has-text("Video")').first
+                if await live_video.is_visible(timeout=700):
+                    return True
+                if await ui.page.get_by_text(
+                    "Agent settings", exact=True
+                ).first.is_visible(timeout=700):
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Flow settings trigger %s failed: %s", selector, exc)
+        return False
 
     async def agent_section(ui: object, label: str) -> object:
         if not await agent_settings_open(ui):
@@ -275,9 +367,16 @@ def apply_flow_ui_compatibility(self) -> None:
     flow_ui.FlowUI.select_aspect = agent_aware_select_aspect
 
     async def agent_aware_select_duration(ui: object, duration: int) -> None:
-        if await ui.page.locator('button[aria-label="Settings"]').first.is_visible(timeout=300):
-            # Current Agent UI has no duration control. The screenplay duration is
-            # embedded in the production prompt; post-render QC verifies the result.
+        live_settings = ui.page.locator(
+            'button[aria-label="Settings trigger"]'
+        ).first
+        if await live_settings.is_visible(timeout=300):
+            await flow_ui._studio_agent_original_select_duration(ui, duration)
+            return
+        if await ui.page.locator(
+            'button[aria-label="Settings"]'
+        ).first.is_visible(timeout=300):
+            # Legacy Agent UI did not expose a duration control.
             return
         await flow_ui._studio_agent_original_select_duration(ui, duration)
 
@@ -323,6 +422,18 @@ def apply_flow_ui_compatibility(self) -> None:
     flow_ui.FlowUI.select_image_model = agent_aware_select_image_model
 
     async def agent_aware_get_selected_model(ui: object) -> str:
+        live_picker = ui.page.locator(
+            'button[aria-label="Select model family"]'
+        ).first
+        try:
+            if await live_picker.is_visible(timeout=500):
+                return (
+                    (await live_picker.inner_text())
+                    .replace("arrow_drop_down", "")
+                    .strip()
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Flow live selected-model probe failed: %s", exc)
         label = (
             "Image generation default model"
             if self._active_media_type == "image"
@@ -342,6 +453,18 @@ def apply_flow_ui_compatibility(self) -> None:
         original_click_generate = flow_ui.FlowUI.click_generate
 
         async def click_generate(ui: object) -> None:
+            warning = ui.page.locator(
+                'button[aria-label="Insufficient credits warning"]'
+            ).first
+            try:
+                if await warning.is_visible(timeout=300):
+                    raise RuntimeError(
+                        "Flow reports insufficient credits; refusing generation."
+                    )
+            except RuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Flow credit-warning probe failed: %s", exc)
             start = ui.page.locator('button[aria-label="Start generation"]').first
             try:
                 if await start.is_visible(timeout=700) and not await start.is_disabled():
@@ -354,18 +477,38 @@ def apply_flow_ui_compatibility(self) -> None:
         click_generate._studio_agent_compat = True  # type: ignore[attr-defined]
         flow_ui.FlowUI.click_generate = click_generate
 
-    async def ensure_video_settings(ui: object) -> None:
-        video_tab = ui.page.locator('[role="tab"]:has-text("Video")').first
-        image_tab = ui.page.locator('[role="tab"]:has-text("Image")').first
-        tabs_open = False
+    async def control_selected(control: object) -> bool:
+        return (
+            (await control.get_attribute("aria-checked")) == "true"
+            or (await control.get_attribute("aria-selected")) == "true"
+            or (await control.get_attribute("data-state")) == "active"
+        )
+
+    async def visible_media_control(ui: object, label: str) -> object:
+        live = ui.page.locator(f'[role="radio"]:has-text("{label}")').first
         try:
-            tabs_open = await video_tab.is_visible(timeout=300) and await image_tab.is_visible(
-                timeout=300
-            )
+            if await live.is_visible(timeout=300):
+                return live
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Flow media-tab visibility probe failed: %s", exc)
-        if not tabs_open:
-            trigger = ui.page.locator('button:has-text("Video ·")').first
+            logger.debug("Flow live media control %s probe failed: %s", label, exc)
+        return ui.page.locator(f'[role="tab"]:has-text("{label}")').first
+
+    async def ensure_video_settings(ui: object) -> None:
+        video_option = await visible_media_control(ui, "Video")
+        image_option = await visible_media_control(ui, "Image")
+        options_open = False
+        try:
+            options_open = await video_option.is_visible(
+                timeout=300
+            ) and await image_option.is_visible(timeout=300)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Flow media-option visibility probe failed: %s", exc)
+        if not options_open:
+            trigger = ui.page.locator(
+                'button[aria-label="Settings trigger"]'
+            ).first
+            if not await trigger.is_visible(timeout=500):
+                trigger = ui.page.locator('button:has-text("Video")').first
             if not await trigger.is_visible(timeout=500):
                 menu_buttons = ui.page.locator('button:visible[aria-haspopup="menu"]')
                 trigger = None
@@ -383,23 +526,24 @@ def apply_flow_ui_compatibility(self) -> None:
                     raise RuntimeError("Could not find the Flow media settings button")
             await trigger.click(timeout=1500)
             await ui.page.wait_for_timeout(400)
-        if not await video_tab.is_visible(timeout=1000):
+            video_option = await visible_media_control(ui, "Video")
+        if not await video_option.is_visible(timeout=1000):
             raise RuntimeError("Could not open the Flow video settings panel")
-        if (await video_tab.get_attribute("data-state")) != "active":
-            await video_tab.click(timeout=1500)
+        if not await control_selected(video_option):
+            await video_option.click(timeout=1500)
             await ui.page.wait_for_timeout(400)
-        if (await video_tab.get_attribute("data-state")) != "active":
-            raise RuntimeError("Could not select the Flow video tab")
+        if not await control_selected(video_option):
+            raise RuntimeError("Could not select the Flow video option")
 
     async def select_video_tab_option(ui: object, label: str, kind: str) -> None:
         await ensure_video_settings(ui)
-        option = ui.page.locator(f'[role="tab"]:has-text("{label}")').first
+        option = await visible_media_control(ui, label)
         if not await option.is_visible(timeout=1000):
             raise RuntimeError(f"Could not find Flow {kind} option {label!r}")
-        if (await option.get_attribute("data-state")) != "active":
+        if not await control_selected(option):
             await option.click(timeout=1500)
             await ui.page.wait_for_timeout(400)
-        if (await option.get_attribute("data-state")) != "active":
+        if not await control_selected(option):
             raise RuntimeError(f"Could not select Flow {kind} option {label!r}")
 
     if not hasattr(flow_ui, "_studio_original_select_aspect"):

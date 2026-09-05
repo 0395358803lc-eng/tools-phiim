@@ -153,6 +153,12 @@ def test_flow_connection_and_reference_routes(tmp_path: Path) -> None:
 
 
 def test_embedded_flow_generation_contract(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
+    from flow_story_studio.flow_integration import generation as generation_module
+
+    monkeypatch.setattr(
+        generation_module, "can_attach_existing_chrome", lambda _path: False
+    )
     storage = ProjectStorage(tmp_path / "projects")
     project = StudioService(storage).analyze(
         AnalyzeRequest(
@@ -210,6 +216,7 @@ def test_embedded_flow_generation_contract(tmp_path: Path, monkeypatch: object) 
 def test_flow_browser_download_fallback_and_candidate_identity(
     tmp_path: Path, monkeypatch: object
 ) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     project = StudioService(ProjectStorage(tmp_path / "projects")).analyze(
         AnalyzeRequest(
             name="Fallback download",
@@ -238,6 +245,7 @@ def test_flow_browser_download_fallback_and_candidate_identity(
             return []
 
     integration._client = lambda *args, **kwargs: FakeClient()  # type: ignore[method-assign]
+    integration._chrome_port_file = tmp_path / "missing-DevToolsActivePort"
     fallback_calls: list[str] = []
 
     async def fake_browser_download(project_id: str, job: object, output: Path) -> list[Path]:

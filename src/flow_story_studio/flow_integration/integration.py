@@ -31,6 +31,7 @@ from . import session as session_module
 from .browser import (
     can_attach_existing_chrome,
     default_flow_chrome_profile,
+    inspect_live_flow_session,
     launch_flow_chrome,
 )
 from .catalog import VIDEO_MODELS
@@ -60,30 +61,68 @@ class FlowCLIIntegration:
         self.timeout = timeout or int(os.getenv("FLOW_RENDER_TIMEOUT", "900"))
         self._force_headed_browser = False
         self._active_media_type = "video"
-        self._flow_chrome_profile = Path(
-            os.getenv("FLOW_CHROME_PROFILE", str(default_flow_chrome_profile()))
-        ).resolve()
-        explicit_port = os.getenv("FLOW_CHROME_DEVTOOLS_ACTIVE_PORT", "").strip()
-        if explicit_port:
-            self._chrome_port_file = Path(explicit_port).expanduser().resolve()
+
+        from .gflow_transport import gflow_available, gflow_enabled
+
+        use_gflow = gflow_enabled() and gflow_available()
+        explicit_profile = os.getenv("FLOW_CHROME_PROFILE", "").strip()
+        if explicit_profile:
+            default_profile = Path(explicit_profile).expanduser().resolve()
+        elif use_gflow:
+            try:
+                from gflow_cli.auth import profile_dir as gflow_profile_dir
+
+                profile_name = os.getenv("GFLOW_CLI_PROFILE", "").strip() or "default"
+                default_profile = Path(gflow_profile_dir(profile_name)).resolve()
+            except Exception:  # noqa: BLE001
+                default_profile = default_flow_chrome_profile()
         else:
-            legacy_port = (
-                Path.home()
-                / "AppData"
-                / "Local"
+            default_profile = default_flow_chrome_profile()
+        self._flow_chrome_profile = default_profile
+
+        explicit_port = os.getenv("FLOW_CHROME_DEVTOOLS_ACTIVE_PORT", "").strip()
+        self._chrome_port_file = (
+            Path(explicit_port).expanduser().resolve()
+            if explicit_port
+            else self._flow_chrome_profile / "DevToolsActivePort"
+        )
+        # In gflow mode, never silently attach the user's unrelated Chrome
+        # profile: login, verification and generation must share one profile.
+        if (
+            not use_gflow
+            and not explicit_port
+            and not can_attach_existing_chrome(self._chrome_port_file)
+        ):
+            local_app_data = Path(
+                os.getenv(
+                    "LOCALAPPDATA",
+                    str(Path.home() / "AppData" / "Local"),
+                )
+            )
+            user_chrome_port = (
+                local_app_data
                 / "Google"
                 / "Chrome"
                 / "User Data"
                 / "DevToolsActivePort"
-            )
-            self._chrome_port_file = (
-                legacy_port
-                if can_attach_existing_chrome(legacy_port)
-                else self._flow_chrome_profile / "DevToolsActivePort"
-            )
+            ).resolve()
+            if can_attach_existing_chrome(user_chrome_port):
+                self._chrome_port_file = user_chrome_port
 
     @property
     def configured(self) -> bool:
+        from .gflow_transport import (
+            gflow_available,
+            gflow_enabled,
+            resolve_gflow_profile_dir,
+        )
+
+        if gflow_enabled() and gflow_available():
+            try:
+                resolve_gflow_profile_dir()
+                return True
+            except FlowIntegrationError:
+                return False
         return self.session.configured
 
     @property
@@ -106,11 +145,127 @@ class FlowCLIIntegration:
         return session_module._browser_ready()
 
     async def status(self, *, verify: bool = False) -> FlowConnection:
-        connection = await self.session.status(verify=verify)
-        connection.cdp_ready = self._can_attach_existing_chrome()
-        connection.interactive_login_required = (
-            not connection.authenticated and not connection.cdp_ready
+        from .gflow_transport import (
+            gflow_available,
+            gflow_enabled,
+            resolve_gflow_profile_dir,
+            verify_gflow_profile,
         )
+
+        cdp_ready = self._can_attach_existing_chrome()
+        if gflow_enabled() and gflow_available():
+            connection = await self.session.status(verify=False)
+            connection.transport = "gflow+flow.google.com"
+            connection.flow_cli_available = True
+            connection.cdp_ready = cdp_ready
+            connection.browser_ready = True
+            connection.cookie_count = 0
+
+            profile_ready = False
+            try:
+                resolve_gflow_profile_dir()
+                profile_ready = True
+            except FlowIntegrationError:
+                profile_ready = False
+            connection.configured = profile_ready
+
+            live_project_id: str | None = None
+            if verify and cdp_ready:
+                try:
+                    _cookies, _raw, live_authenticated, live_project_id = (
+                        await inspect_live_flow_session(self._chrome_port_file)
+                    )
+                    connection.authenticated = live_authenticated
+                    connection.configured = profile_ready or live_authenticated
+                    if live_authenticated:
+                        suffix = (
+                            f" Project live: {live_project_id}."
+                            if live_project_id
+                            else ""
+                        )
+                        connection.message = (
+                            "gflow profile đã xác thực trên Flow UI live."
+                            + suffix
+                            + " Đóng cửa sổ Chrome đăng nhập trước khi bắt đầu render "
+                            "để gflow có thể mở profile độc quyền."
+                        )
+                    else:
+                        connection.message = (
+                            "Chrome gflow profile đang mở nhưng chưa xác nhận được "
+                            "phiên Flow đã đăng nhập."
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Could not inspect live gflow profile: %s", exc)
+                    connection.authenticated = False
+                    connection.message = "Không thể xác minh live gflow profile."
+            elif verify:
+                authenticated, detail, _profile = await verify_gflow_profile()
+                connection.authenticated = authenticated
+                connection.configured = profile_ready
+                connection.message = (
+                    "gflow profile đã xác thực và sẵn sàng render."
+                    if authenticated
+                    else f"gflow profile chưa sẵn sàng: {detail}"
+                )
+            else:
+                connection.authenticated = False
+                if cdp_ready:
+                    connection.message = (
+                        "Chrome gflow profile đã mở; đăng nhập Flow rồi nhấn Kiểm tra."
+                    )
+                elif profile_ready:
+                    connection.message = (
+                        "Đã lưu gflow profile; nhấn Kiểm tra để xác thực phiên Flow."
+                    )
+                else:
+                    connection.message = (
+                        "gflow đã cài nhưng profile chưa có phiên Flow; "
+                        "hãy mở phiên đăng nhập Flow."
+                    )
+
+            connection.interactive_login_required = not connection.authenticated
+            return connection
+
+        live_authenticated = False
+        live_project_id: str | None = None
+        if verify and cdp_ready:
+            try:
+                cookies, raw, live_authenticated, live_project_id = (
+                    await inspect_live_flow_session(self._chrome_port_file)
+                )
+                if cookies:
+                    self._save_cookies(cookies, raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "Could not inspect the live Flow Chrome session: %s", exc
+                )
+
+        connection = await self.session.status(verify=verify and not cdp_ready)
+        if verify and cdp_ready:
+            connection.authenticated = live_authenticated
+            connection.transport = "flow-cli+chrome-cdp"
+            if live_authenticated:
+                suffix = (
+                    f" Project live: {live_project_id}."
+                    if live_project_id
+                    else ""
+                )
+                connection.message = (
+                    "Phiên Google Flow live đã xác thực qua Chrome CDP; "
+                    "không dùng endpoint tRPC labs.google đã lỗi thời."
+                    + suffix
+                )
+            else:
+                connection.message = (
+                    "Chrome Flow profile đã mở nhưng chưa xác nhận được phiên "
+                    "Flow đã đăng nhập."
+                )
+        connection.cdp_ready = cdp_ready
+        connection.interactive_login_required = not connection.authenticated
+        if cdp_ready and not verify and not connection.authenticated:
+            connection.message = (
+                "Chrome Flow profile đã mở; nhấn Kiểm tra để xác thực trực tiếp trên UI Flow."
+            )
         return connection
 
     async def start_browser_session(self) -> FlowConnection:
@@ -125,12 +280,14 @@ class FlowCLIIntegration:
             self._chrome_port_file = port_file
         connection = await self.status(verify=False)
         connection.cdp_ready = self._can_attach_existing_chrome()
-        connection.interactive_login_required = not connection.cdp_ready
-        if connection.cdp_ready:
+        connection.interactive_login_required = not connection.authenticated
+        if connection.cdp_ready and not connection.authenticated:
             connection.message = (
-                "Chrome Flow profile đã mở và sẵn sàng cho CDP; "
-                "hãy đăng nhập Google Flow trong cửa sổ Chrome nếu cần."
+                "Chrome Flow profile đã mở; hãy đăng nhập Google Flow trong cửa sổ "
+                "Chrome rồi nhấn Kiểm tra."
             )
+        elif connection.cdp_ready:
+            connection.message = "Chrome Flow profile đã xác thực và sẵn sàng cho CDP."
         return connection
 
     async def connect(self, cookie_input: str) -> FlowConnection:

@@ -387,10 +387,17 @@ class FlowVideoModel(StrictModel):
 class FlowConnection(StrictModel):
     configured: bool
     authenticated: bool = False
-    transport: Literal["none", "flow-cli"] = "none"
+    transport: Literal[
+        "none",
+        "flow-cli",
+        "flow-cli+chrome-cdp",
+        "gflow",
+        "gflow+chrome-cdp",
+    ] = "none"
     cookie_count: int = 0
     message: str = ""
     flow_cli_available: bool = False
+    gflow_available: bool = False
     browser_ready: bool = False
     cdp_ready: bool = False
     interactive_login_required: bool = False

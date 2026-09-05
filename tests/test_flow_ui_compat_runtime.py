@@ -16,6 +16,9 @@ class FakeKeyboard:
     async def insert_text(self, value: str) -> None:
         self.events.append(f"insert:{value}")
 
+    async def type(self, value: str, delay=None) -> None:
+        self.events.append(f"type:{value}")
+
 
 class BasicLocator:
     def __init__(
@@ -36,6 +39,9 @@ class BasicLocator:
     @property
     def first(self):
         return self
+
+    async def count(self):
+        return 1
 
     async def is_visible(self, timeout=None):
         return self.visible
@@ -260,3 +266,60 @@ async def test_agent_fallback_uses_radix_aspect_adapter(tmp_path: Path) -> None:
     assert flow_ui._studio_agent_original_select_aspect is flow_ui._studio_radix_select_aspect
     await ui.select_aspect("16:9", media_type="video")
     assert aspect.visible is True
+
+
+@pytest.mark.asyncio
+async def test_live_settings_trigger_uses_radio_duration_controls(tmp_path: Path) -> None:
+    _integration, flow_ui = _patched_flow(tmp_path)
+    page = FakePage()
+    page.locators['button[aria-label="Settings trigger"]'] = BasicLocator(visible=True)
+    page.locators['[role="radio"]:has-text("Video")'] = BasicLocator(
+        visible=True, attributes={"aria-checked": "true"}
+    )
+    page.locators['[role="radio"]:has-text("Image")'] = BasicLocator(
+        visible=True, attributes={"aria-checked": "false"}
+    )
+    duration = BasicLocator(visible=True, attributes={"aria-checked": "true"})
+    page.locators['[role="radio"]:has-text("8s")'] = duration
+    ui = flow_ui.FlowUI(page)
+
+    await ui.select_duration(8)
+
+    assert duration.clicked == 0
+
+
+@pytest.mark.asyncio
+async def test_live_selected_model_uses_model_family_trigger(tmp_path: Path) -> None:
+    integration, flow_ui = _patched_flow(tmp_path)
+    integration._active_media_type = "video"
+    page = FakePage()
+    selector = 'button[aria-label="Select model family"]'
+    page.locators[selector] = BasicLocator(
+        visible=True,
+        text="Veo 3.1 - Lite [Lower Priority]\narrow_drop_down",
+    )
+    ui = flow_ui.FlowUI(page)
+
+    selected = await ui.get_selected_model()
+
+    assert selected == "Veo 3.1 - Lite [Lower Priority]"
+
+
+@pytest.mark.asyncio
+async def test_generate_fails_closed_on_live_insufficient_credit_warning(
+    tmp_path: Path,
+) -> None:
+    _integration, flow_ui = _patched_flow(tmp_path)
+    page = FakePage()
+    page.locators[
+        'button[aria-label="Insufficient credits warning"]'
+    ] = BasicLocator(visible=True)
+    page.locators['button[aria-label="Start generation"]'] = BasicLocator(
+        visible=True, disabled=False
+    )
+    ui = flow_ui.FlowUI(page)
+
+    with pytest.raises(RuntimeError, match="insufficient credits"):
+        await ui.click_generate()
+
+    assert page.locators['button[aria-label="Start generation"]'].clicked == 0

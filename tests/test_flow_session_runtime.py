@@ -232,7 +232,8 @@ async def test_existing_chrome_manager_attaches_and_disconnects_cleanly(
 
     assert started is manager
     assert manager.context is context
-    assert calls[0] == "ws://127.0.0.1:9222/devtools/browser/session"
+    assert calls[0].startswith("ws://127.0.0.1:")
+    assert "/devtools/browser/session" not in calls[0]
     await manager.stop()
     assert calls[-1] == "stop"
     assert manager.context is None

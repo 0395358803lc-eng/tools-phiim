@@ -124,6 +124,7 @@ async def test_browser_recovery_writes_valid_exact_mp4(tmp_path, monkeypatch):
     from flow_cli import _browser
 
     flow = FlowCLIIntegration(tmp_path)
+    flow._chrome_port_file = tmp_path / "missing-DevToolsActivePort"
     monkeypatch.setattr(flow.vault, "load", lambda: ({"SID": "x"}, None))
     payload = b"0000ftyp" + b"x" * 2048
 

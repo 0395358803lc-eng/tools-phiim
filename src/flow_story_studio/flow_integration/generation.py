@@ -12,8 +12,14 @@ from ..flow_media import extract_last_frame, ffmpeg_path
 from ..flow_ui_contract import FlowUIContractError, assert_safe_video_model
 from ..models import Project, Scene
 from ..providers.base import RenderResult
-from .browser import _ExistingChromeManager, can_attach_existing_chrome
+from .browser import (
+    ExistingChromeAttachError,
+    _ExistingChromeManager,
+    can_attach_existing_chrome,
+    ensure_live_flow_project,
+)
 from .errors import FlowIntegrationError, RenderCheckpoint
+from .recovery import wait_for_browser_video
 
 
 async def _generate_with_existing_chrome(
@@ -28,25 +34,32 @@ async def _generate_with_existing_chrome(
     image_path: str | None = None,
     timeout: int,
     count: int = 1,
+    manager: _ExistingChromeManager | None = None,
 ) -> Any:
-    if not can_attach_existing_chrome(self._chrome_port_file):
+    if manager is None and not can_attach_existing_chrome(self._chrome_port_file):
         raise RuntimeError("Existing Chrome remote debugging is unavailable")
     previous_media_type = self._active_media_type
     self._active_media_type = media_type
+
+    async def submit(active_manager: _ExistingChromeManager) -> Any:
+        return await client._generate_via_browser(
+            prompt=prompt,
+            aspect=aspect,
+            model=model,
+            duration=duration,
+            image_path=image_path,
+            headless=False,
+            timeout=timeout,
+            media_type=media_type,
+            count=count,
+            manager=active_manager,
+        )
+
     try:
-        async with _ExistingChromeManager(self._chrome_port_file) as manager:
-            return await client._generate_via_browser(
-                prompt=prompt,
-                aspect=aspect,
-                model=model,
-                duration=duration,
-                image_path=image_path,
-                headless=False,
-                timeout=timeout,
-                media_type=media_type,
-                count=count,
-                manager=manager,
-            )
+        if manager is not None:
+            return await submit(manager)
+        async with _ExistingChromeManager(self._chrome_port_file) as owned:
+            return await submit(owned)
     finally:
         self._active_media_type = previous_media_type
 
@@ -58,9 +71,16 @@ async def _generate_video(self, client: Any, **kwargs: Any) -> Any:
         and hasattr(client, "_generate_via_browser")
         and browser_kwargs_ready
     ):
-        return await _generate_with_existing_chrome(
-            self, client, media_type="video", count=1, **kwargs
-        )
+        try:
+            return await _generate_with_existing_chrome(
+                self, client, media_type="video", count=1, **kwargs
+            )
+        except ExistingChromeAttachError:
+            # Chrome can expose a consent-enabled DevTools socket that Browser Use
+            # can drive while Playwright CDP attach is rejected or times out.
+            # This failure happens before any Flow UI action, so falling back
+            # cannot duplicate a submitted generation.
+            self._force_headed_browser = True
     configured_headless = os.getenv("FLOW_BROWSER_HEADLESS", "1").strip().lower() not in {
         "0",
         "false",
@@ -93,10 +113,31 @@ async def generate_reference_image(
     self, project_id: str, reference_id: str, prompt: str
 ) -> str:
     """Generate and download one canonical reference image through Google Flow."""
+    from .gflow_transport import (
+        generate_reference_image_with_gflow,
+        gflow_available,
+        gflow_enabled,
+    )
+
+    if gflow_enabled():
+        if not gflow_available():
+            raise FlowIntegrationError(
+                "gflow-cli không khả dụng; không fallback reference image sang Labs API cũ."
+            )
+        return await generate_reference_image_with_gflow(
+            self,
+            project_id,
+            reference_id,
+            prompt,
+        )
+
     cookies, _ = self.vault.load()
-    if not cookies:
-        raise FlowIntegrationError("Chưa có phiên xác thực Flow CLI để tạo reference image")
-    client = self._client(cookies)
+    cdp_ready = can_attach_existing_chrome(self._chrome_port_file)
+    if not cookies and not cdp_ready:
+        raise FlowIntegrationError(
+            "Chưa có phiên Flow hợp lệ; hãy mở Chrome đăng nhập Flow hoặc nhập cookie"
+        )
+    client = self._client(cookies or {})
     model = os.getenv("FLOW_REFERENCE_IMAGE_MODEL", "nano-banana-pro")
     try:
         if can_attach_existing_chrome(self._chrome_port_file):
@@ -161,18 +202,7 @@ async def generate(
         recovered = await self._recover_submitted(project, scene)
         if recovered:
             return recovered
-    cookies, _ = self.vault.load()
-    if not cookies:
-        raise FlowIntegrationError("Chưa có phiên xác thực Flow CLI để render")
-    client = self._client(cookies, project.flow_project_id or None)
-    upstream_project_id = project.flow_project_id
-    if not upstream_project_id:
-        upstream_project_id = await client.create_project(project.name, media_type="video")
-        project.flow_project_id = upstream_project_id
-    scene.upstream_project_id = upstream_project_id
-    if checkpoint:
-        checkpoint(project, scene)
-    duration = scene.duration if scene.duration in {4, 6, 8} else 8
+
     allow_paid = os.getenv("FLOW_ALLOW_PAID_VIDEO_MODELS", "").strip() == "1"
     try:
         safe_video_model = assert_safe_video_model(
@@ -181,6 +211,48 @@ async def generate(
         )
     except FlowUIContractError as exc:
         raise FlowIntegrationError(str(exc)) from exc
+
+    requested_transport = os.getenv("FLOW_VIDEO_TRANSPORT", "gflow").strip().lower()
+    if requested_transport != "legacy":
+        from .gflow_transport import generate_video_with_gflow, gflow_available
+
+        if gflow_available():
+            return await generate_video_with_gflow(
+                self,
+                project,
+                scene,
+                safe_model=safe_video_model,
+                checkpoint=checkpoint,
+            )
+        if requested_transport == "gflow":
+            raise FlowIntegrationError(
+                "gflow-cli không khả dụng; không fallback sang Flow Labs API cũ."
+            )
+
+    cookies, _ = self.vault.load()
+    cdp_ready = can_attach_existing_chrome(self._chrome_port_file)
+    if not cookies and not cdp_ready:
+        raise FlowIntegrationError(
+            "Chưa có phiên Flow hợp lệ; hãy mở Chrome đăng nhập Flow hoặc nhập cookie"
+        )
+    upstream_project_id = project.flow_project_id
+    if not upstream_project_id:
+        if cdp_ready:
+            upstream_project_id = await ensure_live_flow_project(
+                self._chrome_port_file
+            )
+        else:
+            legacy_client = self._client(cookies or {}, None)
+            upstream_project_id = await legacy_client.create_project(
+                project.name,
+                media_type="video",
+            )
+        project.flow_project_id = upstream_project_id
+    client = self._client(cookies or {}, upstream_project_id)
+    scene.upstream_project_id = upstream_project_id
+    if checkpoint:
+        checkpoint(project, scene)
+    duration = scene.duration if scene.duration in {4, 6, 8} else 8
     try:
         job = await _generate_video(
             self,
@@ -199,8 +271,34 @@ async def generate(
         if checkpoint:
             checkpoint(project, scene)
         completed = job
-        if not getattr(job, "is_success", False):
-            completed = await client.wait_for_video(job, timeout=self.timeout, poll_interval=5)
+        output = self.data_root / "renders" / project.id / scene.id
+        output.mkdir(parents=True, exist_ok=True)
+        if cdp_ready:
+            files = await wait_for_browser_video(
+                self,
+                upstream_project_id,
+                job,
+                output,
+                timeout=self.timeout,
+                poll_interval=5,
+            )
+            try:
+                completed.status = "SUCCEEDED"
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            if not getattr(job, "is_success", False):
+                completed = await client.wait_for_video(
+                    job,
+                    timeout=self.timeout,
+                    poll_interval=5,
+                )
+            files = await self._download_completed(
+                client,
+                completed,
+                output,
+                upstream_project_id,
+            )
         scene.upstream_workflow_id = str(
             getattr(completed, "workflow_id", None) or scene.upstream_workflow_id
         )
@@ -212,14 +310,6 @@ async def generate(
         )
         if checkpoint:
             checkpoint(project, scene)
-        output = self.data_root / "renders" / project.id / scene.id
-        output.mkdir(parents=True, exist_ok=True)
-        files = await self._download_completed(
-            client,
-            completed,
-            output,
-            upstream_project_id,
-        )
     except FlowIntegrationError:
         raise
     except Exception as exc:  # noqa: BLE001
