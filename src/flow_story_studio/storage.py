@@ -35,7 +35,7 @@ class ProjectStorage:
 
     def _path(self, project_id: str) -> Path:
         if not project_id.replace("-", "").replace("_", "").isalnum():
-            raise ValueError("project id khÃ´ng há»£p lá»‡")
+            raise ValueError("project id không hợp lệ")
         return self.root / f"{project_id}.json"
 
     def _backup_dir(self, project_id: str) -> Path:
@@ -132,7 +132,7 @@ class ProjectStorage:
 
     def restore_backup(self, project_id: str, backup_name: str) -> Project:
         if Path(backup_name).name != backup_name or not backup_name.endswith(".json"):
-            raise ValueError("backup name khÃ´ng há»£p lá»‡")
+            raise ValueError("backup name không hợp lệ")
         backup = self._backup_dir(project_id) / backup_name
         if not backup.is_file():
             raise FileNotFoundError(backup_name)
@@ -140,7 +140,7 @@ class ProjectStorage:
             raw = json.loads(backup.read_text(encoding="utf-8"))
             restored = Project.model_validate(migrate_project_payload(raw))
             if restored.id != project_id:
-                raise ValueError("backup project id khÃ´ng khá»›p")
+                raise ValueError("backup project id không khớp")
             self._backup_existing(project_id, force=True)
             restored.updated_at = utc_now()
             target = self._path(project_id)

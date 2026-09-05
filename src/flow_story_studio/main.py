@@ -118,7 +118,7 @@ def create_app(
         try:
             project = service.get_required(project_id)
         except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail="KhÃ´ng tÃ¬m tháº¥y project") from exc
+            raise HTTPException(status_code=404, detail="Không tìm thấy project") from exc
         merge_task = merge_tasks.get(project_id)
         if project.final_video.status == "Merging" and not (merge_task and not merge_task.done()):
             ready = all(

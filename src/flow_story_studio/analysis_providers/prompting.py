@@ -264,7 +264,7 @@ DRAFT IDS AND SCENE BOUNDARIES:
 Return one JSON object with keys story_bible, characters, locations, props, master_prompt,
 visual_style and scenes. Keep the supplied IDs. You may add missed characters/locations/props with
 the next sequential ID. Do not create scenes from headings, metadata, character profiles, voice
-labels or camera notes. A character must be a real on-screen person; never return "ft", "GiÃ¡Â»Âng",
+labels or camera notes. A character must be a real on-screen person; never return "ft", "Giọng",
 "Voice", a section title or a technical role as a character. Fill a specific immutable visual
 identity for each character and fixed architecture/spatial anchors for each location. For every
 scene return: id, summary, characters (IDs), location_id, action,

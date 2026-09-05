@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from flow_story_studio.reference_manager import (
 )
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.storage import ProjectStorage
+
+MOJIBAKE_PATTERNS = (
+    r"KhÃ´ng",
+    r"tÃ¬m",
+    r"tháº¥y",
+    r"há»£p",
+    r"lá»‡",
+    r"khá»›p",
+    r"GiÃ¡",
+    r"Â»",
+)
 
 SCRIPT = """
 TARGET RUNTIME: 16 seconds
@@ -149,6 +161,19 @@ def test_frame_extractor_creates_first_middle_last(tmp_path: Path) -> None:
     assert frames.first and frames.middle and frames.last
     for relative in (frames.first, frames.middle, frames.last):
         assert (tmp_path / relative).is_file()
+
+
+def test_no_vietnamese_mojibake_in_source() -> None:
+    root = Path(__file__).resolve().parents[1] / "src"
+    source_files = sorted(root.rglob("*.py"))
+    assert source_files
+    regexes = [re.compile(pattern, re.IGNORECASE) for pattern in MOJIBAKE_PATTERNS]
+    offenders: list[str] = []
+    for path in source_files:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if any(rx.search(line) for rx in regexes):
+                offenders.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
+    assert not offenders, "\n".join(offenders)
 
 
 def test_accepted_anchor_promotes_and_resolves_visual_references(tmp_path: Path) -> None:
