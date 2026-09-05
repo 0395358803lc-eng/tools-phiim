@@ -141,10 +141,13 @@ def _plain_line(raw: str) -> str:
     return re.sub(r"\*\*|__|`", "", value).strip()
 
 
-def _declared_items(text: str, section_re: re.Pattern[str]) -> list[str]:
+def _declared_records(
+    text: str,
+    section_re: re.Pattern[str],
+) -> list[tuple[str, str]]:
     lines = re.sub(r"\r\n?", "\n", text).splitlines()
     active = False
-    values: list[str] = []
+    values: list[tuple[str, str]] = []
     section_headers = re.compile(
         r"^(?:nhân\s*vật(?:\s*chính)?|characters?|cast|đạo\s*cụ(?:\s*continuity|\s*cần.*)?|props?|objects?)\s*:?.*$",
         re.IGNORECASE,
@@ -169,12 +172,19 @@ def _declared_items(text: str, section_re: re.Pattern[str]) -> list[str]:
         candidate = _plain_line(match.group(1)) if match else plain
         if not candidate or not re.search(r"[\wÀ-ỹ]", candidate, re.UNICODE):
             continue
-        candidate = re.split(r"[,;:–—]", candidate, maxsplit=1)[0].strip().rstrip(".。")
-        if not candidate or not re.search(r"[\wÀ-ỹ]", candidate, re.UNICODE):
+        name = re.split(r"[,;:–—]", candidate, maxsplit=1)[0].strip().rstrip(".。")
+        if not name or not re.search(r"[\wÀ-ỹ]", name, re.UNICODE):
             continue
-        if 1 <= len(candidate.split()) <= 8 and candidate not in values:
-            values.append(candidate)
+        if not 1 <= len(name.split()) <= 8:
+            continue
+        details = candidate[len(name) :].lstrip(" ,;:–—-").strip()
+        if all(existing_name != name for existing_name, _ in values):
+            values.append((name, details))
     return values
+
+
+def _declared_items(text: str, section_re: re.Pattern[str]) -> list[str]:
+    return [name for name, _ in _declared_records(text, section_re)]
 
 
 def _declared_characters(text: str) -> list[str]:
@@ -349,30 +359,92 @@ def _story_bible(text: str) -> StoryBible:
     )
 
 
-def _characters(text: str) -> list[Character]:
-    declared = _declared_characters(text)
-    speakers = _standalone_speakers(text) if not declared else []
-    declared_keys = {name.casefold() for name in declared}
-    found: list[tuple[str, str]] = [(name, "Không xác định") for name in declared]
-    found.extend(
-        (name, "Không xác định") for name in speakers if name.casefold() not in declared_keys
+def _character_from_declared(index: int, name: str, details: str) -> Character:
+    folded = details.casefold()
+    gender = (
+        "Nữ"
+        if re.search(r"(?<!\w)(?:nữ|female|woman)(?!\w)", folded)
+        else "Nam"
+        if re.search(r"(?<!\w)(?:nam|male|man)(?!\w)", folded)
+        else "Không xác định"
     )
+    age_match = re.search(r"\b(\d{1,3})\s*(?:tuổi|years?\s+old)\b", details, re.IGNORECASE)
+    age = f"{age_match.group(1)} tuổi" if age_match else "Không xác định"
+
+    fragments = [
+        item.strip().rstrip(".")
+        for item in re.split(r"[,;]", details)
+        if item.strip()
+    ]
+    clothing_markers = (
+        "áo ",
+        "quần ",
+        "váy ",
+        "đầm ",
+        "shirt",
+        "jacket",
+        "coat",
+        "pants",
+        "trousers",
+        "sweater",
+        "dress",
+        "uniform",
+    )
+    hair_markers = ("tóc", "hair")
+    accessory_markers = ("đồng hồ", "kính", "mũ", "watch", "glasses", "hat", "necklace")
+    clothing = ", ".join(
+        item for item in fragments if any(marker in item.casefold() for marker in clothing_markers)
+    )
+    hairstyle = next(
+        (item for item in fragments if any(marker in item.casefold() for marker in hair_markers)),
+        "Theo mô tả gốc",
+    )
+    accessories = ", ".join(
+        item for item in fragments if any(marker in item.casefold() for marker in accessory_markers)
+    )
+    source_lock = details.strip() or "Theo nội dung gốc"
+
+    return Character(
+        id=f"CHAR_{index:03d}",
+        name=name,
+        gender=gender,
+        estimated_age=age,
+        clothing=clothing or "Trang phục phù hợp bối cảnh, giữ nguyên cho đến khi có thay đổi",
+        hairstyle=hairstyle,
+        accessories=accessories or "Không có nếu không được nêu",
+        identifying_features=f"Source profile lock: {source_lock}",
+    )
+
+
+def _characters(text: str) -> list[Character]:
+    declared_records = _declared_records(text, CHARACTER_SECTION_RE)
+    declared = [name for name, _ in declared_records]
+    if declared_records:
+        return [
+            _character_from_declared(index, name, details)
+            for index, (name, details) in enumerate(declared_records[:24], 1)
+        ]
+
+    speakers = _standalone_speakers(text)
+    declared_keys = {name.casefold() for name in declared}
+    found: list[tuple[str, str]] = [
+        (name, "Không xác định") for name in speakers if name.casefold() not in declared_keys
+    ]
     lowered = text.lower()
-    if not declared:
-        for hint, identity in GENERIC_CHARACTERS.items():
-            if hint in lowered and identity[0].casefold() not in GENERIC_REFERENCE_NAMES:
-                found.append(identity)
+    for hint, identity in GENERIC_CHARACTERS.items():
+        if hint in lowered and identity[0].casefold() not in GENERIC_REFERENCE_NAMES:
+            found.append(identity)
 
     quoted_speakers = re.findall(
         r"\b([A-ZÀ-Ỹ][a-zà-ỹ]{1,24})\s+(?:nói|hỏi|đáp|thì thầm|kêu|said|asked)\b",
         text,
     )
     blocked = {"sau", "khi", "trong", "một", "ngày", "cuối", "đột", "nhưng", "và"}
-    for name in quoted_speakers if not declared else []:
+    for name in quoted_speakers:
         key = name.casefold()
         if key in blocked:
             continue
-        if key in GENERIC_REFERENCE_NAMES and key not in declared_keys:
+        if key in GENERIC_REFERENCE_NAMES:
             continue
         found.append((name, "Không xác định"))
     if not found:
@@ -422,9 +494,30 @@ def _locations(text: str) -> list[Location]:
 
 def _props(text: str) -> list[Prop]:
     lowered = text.lower()
-    names = _declared_props(text)
-    hint_items = PROP_HINTS.items() if not names else ()
-    for hint, name in hint_items:
+    declared_records = _declared_records(text, PROP_SECTION_RE)
+    if declared_records:
+        props: list[Prop] = []
+        for index, (name, details) in enumerate(declared_records[:24], 1):
+            source_lock = f"{name}, {details}".strip(" ,") if details else name
+            owner_match = re.search(
+                r"\bcủa\s+([\wÀ-ỹ .'-]{2,40})",
+                source_lock,
+                re.IGNORECASE | re.UNICODE,
+            )
+            owner = owner_match.group(1).strip().rstrip(".") if owner_match else "Chưa xác định"
+            props.append(
+                Prop(
+                    id=f"PROP_{index:03d}",
+                    name=name,
+                    description=f"Source prop lock: {source_lock}",
+                    owner=owner,
+                    state=details or "Nguyên vẹn",
+                )
+            )
+        return props
+
+    names: list[str] = []
+    for hint, name in PROP_HINTS.items():
         if hint not in lowered:
             continue
         key = name.casefold()
