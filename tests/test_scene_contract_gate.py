@@ -28,6 +28,15 @@ def test_analyzer_seals_scene_packet_contracts() -> None:
     assert not verify_scene_contract(project.scenes[0])
 
 
+def test_old_scene_contract_version_is_rejected() -> None:
+    project = analyze_story(AnalyzeRequest(name="old contract", original_text=SCRIPT))
+    scene = project.scenes[0]
+
+    assert verify_scene_contract(scene)
+    scene.contract_version = 1
+    assert not verify_scene_contract(scene)
+
+
 def test_edit_invalidates_contract_until_continuity_recompile(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     service = StudioService(storage)
