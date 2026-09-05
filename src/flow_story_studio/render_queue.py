@@ -87,7 +87,7 @@ class RenderQueue:
         ]
         unknown = set(requested) - valid_ids
         if unknown:
-            raise ValueError(f"Scene khÃ´ng tá»“n táº¡i: {', '.join(sorted(unknown))}")
+            raise ValueError(f"Scene không tồn tại: {', '.join(sorted(unknown))}")
         queued = self._queued_ids[project_id]
         worker = self._workers.get(project_id)
         worker_active = bool(worker and not worker.done())
@@ -183,11 +183,11 @@ class RenderQueue:
             scene.visual_qc = VisualQCReport(
                 status="Unavailable",
                 issues=[
-                    VisualIssue(code="VIDEO_FILE_MISSING", message="KhÃ´ng cÃ³ MP4 Ä‘á»ƒ Visual QC")
+                    VisualIssue(code="VIDEO_FILE_MISSING", message="Không có MP4 để Visual QC")
                 ],
             )
             scene.acceptance = ProductionAcceptance(
-                status="Rejected", reasons=["KhÃ´ng cÃ³ video file Ä‘á»ƒ nghiá»‡m thu hÃ¬nh áº£nh"]
+                status="Rejected", reasons=["Không có video file để nghiệm thu hình ảnh"]
             )
             return
         video = (self.data_root / scene.result_file).resolve()
@@ -198,22 +198,22 @@ class RenderQueue:
                 status="Unavailable",
                 issues=[
                     VisualIssue(
-                        code="VIDEO_PATH_INVALID", message="Video path náº±m ngoÃ i data root"
+                        code="VIDEO_PATH_INVALID", message="Video path nằm ngoài data root"
                     )
                 ],
             )
             scene.acceptance = ProductionAcceptance(
-                status="Rejected", reasons=["Video path khÃ´ng há»£p lá»‡"]
+                status="Rejected", reasons=["Video path không hợp lệ"]
             )
             return
 
         if not self.vision:
             scene.visual_qc.status = "Unavailable"
             scene.visual_qc.issues = [
-                VisualIssue(code="VISION_NOT_CONFIGURED", message="xKiro Vision chÆ°a kháº£ dá»¥ng")
+                VisualIssue(code="VISION_NOT_CONFIGURED", message="xKiro Vision chưa khả dụng")
             ]
             scene.acceptance = ProductionAcceptance(
-                status="Rejected", reasons=["Visual QC khÃ´ng kháº£ dá»¥ng"]
+                status="Rejected", reasons=["Visual QC không khả dụng"]
             )
             return
 
@@ -230,7 +230,7 @@ class RenderQueue:
 
         reasons: list[str] = []
         if not scene.quality or scene.quality.score < project.settings.quality_threshold:
-            reasons.append("Preflight quality dÆ°á»›i ngÆ°á»¡ng")
+            reasons.append("Preflight quality dưới ngưỡng")
         if scene.visual_qc.status != "Passed":
             reasons.append(f"Visual QC: {scene.visual_qc.status}")
         if scene.continuity_qc.status not in {"Passed", "NotApplicable"}:
@@ -265,11 +265,11 @@ class RenderQueue:
                         scene.acceptance = ProductionAcceptance(
                             status="Blocked",
                             reasons=[
-                                f"Phá»¥ thuá»™c scene {blocker.order} chÆ°a Ä‘Æ°á»£c Accepted"
+                                f"Phụ thuộc scene {blocker.order} chưa được Accepted"
                             ],
                         )
                         scene.warnings.append(
-                            f"Blocked: scene {blocker.order} chÆ°a qua Production Acceptance"
+                            f"Blocked: scene {blocker.order} chưa qua Production Acceptance"
                         )
                         await self._update(project, scene, "Blocked", 0)
                         continue

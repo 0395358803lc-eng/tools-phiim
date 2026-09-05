@@ -27,6 +27,7 @@ data/analysis-checkpoints/
 *.sqlite3-shm
 .flow-story-studio.lock
 .xkiro_*_checkpoint
+.xkiro_acceptance_screenplay.*
 
 # Google Flow / browser authentication runtime
 .gflow/
