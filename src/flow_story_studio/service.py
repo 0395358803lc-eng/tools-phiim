@@ -70,6 +70,8 @@ def _invalidate_render_evidence(scene: Scene) -> None:
     scene.result_url = ""
     scene.result_file = ""
     scene.last_frame_file = ""
+    scene.render_provider = ""
+    scene.render_model = ""
     scene.provider_job_id = ""
     scene.upstream_project_id = ""
     scene.upstream_workflow_id = ""
@@ -151,6 +153,25 @@ class StudioService:
         project = self.get_required(project_id)
         _ensure_project_not_rendering(project, operation)
         return project
+
+    def update_video_settings(
+        self,
+        project_id: str,
+        provider: str,
+        video_model: str,
+    ) -> Project:
+        project = self.get_idle_project(project_id, "đổi provider hoặc video model")
+        changed = (
+            project.settings.provider != provider
+            or project.settings.video_model != video_model
+        )
+        project.settings.provider = provider
+        project.settings.video_model = video_model
+        if changed:
+            for scene in project.scenes:
+                _invalidate_render_evidence(scene)
+            project.final_video = FinalVideo(status="NotReady")
+        return self.storage.save(project)
 
     def update_scene(self, project_id: str, scene_id: str, patch: SceneUpdate) -> Project:
         project = self.get_required(project_id)
