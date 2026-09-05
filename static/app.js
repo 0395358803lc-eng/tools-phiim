@@ -671,7 +671,7 @@ async function createProject(autoPipeline = false) {
     if (!$("#analysisModelInput").value) return toast("Hãy chọn model xKiro", true);
   }
   if (autoPipeline && $("#providerInput").value === "google-flow" && !state.flowConfigured) {
-    return toast("Hãy thêm và xác thực cookie Google Flow trước khi chạy Auto pipeline", true);
+    return toast("Hãy đăng nhập gflow + Chrome hoặc cấu hình cookie fallback trước khi chạy Auto pipeline", true);
   }
   const button = autoPipeline ? $("#autoPipelineSubmit") : $("#analyzeSubmit");
   const original = button.textContent;
