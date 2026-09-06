@@ -395,10 +395,10 @@ class FlowCLIIntegration:
         return await recovery._recover_submitted(self, project, scene)
 
     async def generate_reference_image(
-        self, project_id: str, reference_id: str, prompt: str
+        self, project: Project, reference_id: str, prompt: str
     ) -> str:
         return await generation.generate_reference_image(
-            self, project_id, reference_id, prompt
+            self, project, reference_id, prompt
         )
 
     async def generate(

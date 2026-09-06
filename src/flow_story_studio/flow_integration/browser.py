@@ -44,13 +44,13 @@ class _ExistingChromeManager:
             try:
                 async for message in source:
                     await target.send(message)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("WebSocket relay ended: %s", exc)
             finally:
                 try:
                     await target.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Best-effort WebSocket close: %s", exc)
 
         async def proxy_handler(client: object) -> None:
             async with websockets.connect(

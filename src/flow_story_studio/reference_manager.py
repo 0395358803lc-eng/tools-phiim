@@ -119,7 +119,7 @@ class ReferenceManager:
             return False
         try:
             generated = await self.flow.generate_reference_image(
-                project.id, reference.id, _generation_prompt(reference, project.visual_style)
+                project, reference.id, _generation_prompt(reference, project.visual_style)
             )
         except FlowIntegrationError:
             reference.status = "missing"

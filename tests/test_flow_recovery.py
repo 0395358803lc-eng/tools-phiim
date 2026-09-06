@@ -52,6 +52,7 @@ async def test_retry_preserves_existing_flow_job_identity_unless_forced(tmp_path
 
 
 async def test_recovery_failure_never_falls_through_to_new_submission(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     project = analyze_story(AnalyzeRequest(name="recover existing", original_text=SCRIPT))
     scene = project.scenes[0]
     scene.provider_job_id = "job-existing"

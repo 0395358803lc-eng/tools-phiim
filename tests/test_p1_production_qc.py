@@ -263,12 +263,14 @@ async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Pat
         configured = True
 
         async def generate_reference_image(
-            self, project_id: str, reference_id: str, prompt: str
+            self, current_project, reference_id: str, prompt: str
         ) -> str:
-            assert project_id == project.id
+            assert current_project is project
             assert reference_id == reference.id
             assert reference.lock_text in prompt
-            relative = Path("references") / project_id / "entities" / f"{reference_id}.png"
+            relative = (
+                Path("references") / current_project.id / "entities" / f"{reference_id}.png"
+            )
             target = tmp_path / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"canonical-reference")

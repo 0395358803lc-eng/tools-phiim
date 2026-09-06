@@ -37,6 +37,15 @@ acceptance/live-workspace/
 scripts/_flow_cli_cookies.json
 scripts/*cookies*.json
 
+# Flow staging runtime
+data/.gflow-staging/
+
+# Debug logs
+*.log
+
+# Development tools (debug probes, recovery scripts, archives)
+devtools/
+
 # Build artifacts
 build/
 dist/

@@ -513,8 +513,17 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
     hard_fact_items: list[str] = []
     warnings: list[str] = []
 
+    total_character_assertions = 0
+    total_prop_assertions = 0
+    total_scene_assertions = 0
+    total_audio_assertions = 0
+    total_timeline_assertions = 0
+    total_hard_fact_assertions = 0
+
     for expected_name, rule in source_truth.get("characters", {}).items():
         entity = find_matching_character(project, expected_name)
+        required_terms = rule.get("required_terms", [])
+        total_character_assertions += len(required_terms)
         if entity is None:
             character_items.append(f"MISSING character {expected_name}")
             continue
@@ -522,7 +531,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
             project.get("characters", []), entity["id"], entity.get("name", "")
         )
         text = f"{character_text} {visual_bible_text(project, entity['id'])}"
-        for term in rule.get("required_terms", []):
+        for term in required_terms:
             if not contains_term(text, term):
                 character_items.append(
                     f"character {expected_name} missing locked fact: {term}"
@@ -530,6 +539,8 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
 
     for prop_key, rule in source_truth.get("props", {}).items():
         entity = find_matching_prop(project, rule.get("aliases", [prop_key]))
+        required_terms = rule.get("required_terms", [])
+        total_prop_assertions += len(required_terms)
         if entity is None:
             prop_items.append(f"MISSING prop {prop_key}")
             continue
@@ -537,7 +548,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
             project.get("props", []), entity["id"], entity.get("name", "")
         )
         text = f"{prop_text} {visual_bible_text(project, entity['id'])}"
-        for term in rule.get("required_terms", []):
+        for term in required_terms:
             if not contains_term(text, term):
                 prop_items.append(f"prop {prop_key} missing locked fact: {term}")
 
@@ -552,6 +563,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
         required = {fold(value) for value in rule.get("required", [])}
         allowed = {fold(value) for value in rule.get("allowed", [])}
         forbidden = {fold(value) for value in rule.get("forbidden", [])}
+        total_scene_assertions += bool(required) + bool(allowed) + bool(forbidden)
         if required - folded_names:
             scene_items.append(
                 f"scene {number} missing required cast: "
@@ -586,6 +598,8 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
     expected_delivery = source_truth.get("audio_delivery", {})
     for scene in ordered:
         number = scene.get("order", 0)
+        expected_scene_delivery = expected_delivery.get(str(number), [])
+        total_audio_assertions += len(expected_scene_delivery)
         actual: list[tuple[str, str, str]] = []
         for dialogue in scene.get("dialogues", []):
             actual.append(
@@ -597,7 +611,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
             )
         expected = [
             (str(speaker), str(text), str(delivery))
-            for speaker, text, delivery in expected_delivery.get(str(number), [])
+            for speaker, text, delivery in expected_scene_delivery
         ]
         if actual != expected:
             audio_items.append(
@@ -608,6 +622,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
     timeline_map = source_truth.get("timeline", {})
     flashback = {int(value) for value in timeline_map.get("flashback_scenes", [])}
     present = {int(value) for value in timeline_map.get("present_scenes", [])}
+    total_timeline_assertions = len(flashback) + len(present)
     for scene in ordered:
         number = scene.get("order", 0)
         domain = fold(scene.get("start_state", {}).get("time", ""))
@@ -623,6 +638,7 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
 
     for fact in source_truth.get("hard_facts", []):
         number = int(fact["scene"])
+        total_hard_fact_assertions += len(fact.get("terms", []))
         scene = next(
             (item for item in ordered if int(item.get("order", 0)) == number), None
         )
@@ -652,9 +668,29 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
         == hard_fact_items
         == []
     )
+    total_assertions_possible = (
+        total_character_assertions
+        + total_prop_assertions
+        + total_scene_assertions
+        + total_audio_assertions
+        + total_timeline_assertions
+        + total_hard_fact_assertions
+    )
+    error_count = sum(
+        len(items)
+        for items in (
+            character_items,
+            prop_items,
+            scene_items,
+            audio_items,
+            timeline_items,
+            hard_fact_items,
+        )
+    )
+    verdict = "PASS" if passed_checks else "FAIL"
     return {
         "scope": "source-truth comparison",
-        "verdict": "PASS" if passed_checks else "FAIL",
+        "verdict": verdict,
         "pass": passed_checks,
         "checks": {
             "characters": character_items,
@@ -665,17 +701,8 @@ def semantic_report(project: dict[str, Any], source_truth: dict[str, Any]) -> di
             "hard_facts": hard_fact_items,
         },
         "warnings": warnings,
-        "error_count": sum(
-            len(items)
-            for items in (
-                character_items,
-                prop_items,
-                scene_items,
-                audio_items,
-                timeline_items,
-                hard_fact_items,
-            )
-        ),
+        "total_assertions_possible": total_assertions_possible,
+        "error_count": error_count,
         "warning_count": len(warnings),
     }
 

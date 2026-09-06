@@ -160,6 +160,7 @@ async def test_browser_recovery_selects_exact_matching_video(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_recover_submitted_returns_original_job_identity(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     project = analyze_story(AnalyzeRequest(name="recover success", original_text=SCRIPT))
     scene = project.scenes[0]
     scene.provider_job_id = "job-existing"
@@ -191,6 +192,7 @@ async def test_recover_submitted_returns_original_job_identity(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_recover_submitted_rejects_non_mp4_recovery(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "legacy")
     project = analyze_story(AnalyzeRequest(name="recover no mp4", original_text=SCRIPT))
     scene = project.scenes[0]
     scene.provider_job_id = "job-existing"
@@ -307,3 +309,120 @@ async def test_browser_recovery_prefers_cdp_session(tmp_path, monkeypatch) -> No
     assert page_closed == [True]
     assert files[0].name == "flow_media-cdp.mp4"
     assert files[0].read_bytes() == body
+
+
+@pytest.mark.asyncio
+async def test_migrated_recovery_downloads_video_by_media_id(tmp_path, monkeypatch) -> None:
+    from gflow_cli.api.transports import batchexecute
+
+    from flow_story_studio.flow_integration import gflow_transport
+
+    project = analyze_story(AnalyzeRequest(name="migrated recover", original_text=SCRIPT))
+    scene = project.scenes[0]
+    media_id = "cdfb72e5-dec6-42ec-8cb7-b022471c290c"
+    workflow_id = "d09a4cf4-9dd7-46b1-bbcf-d40405fe8423"
+    project_id = "5fa6b591-8d1c-4a59-9106-2b930a4661f2"
+    scene.provider_job_id = media_id
+    scene.upstream_media_id = media_id
+    scene.upstream_workflow_id = workflow_id
+    scene.upstream_project_id = project_id
+    project.flow_project_id = project_id
+
+    raw_record = [
+        media_id,
+        workflow_id,
+        project_id,
+        "CAE",
+        3,
+        "unused",
+    ]
+    record = SimpleNamespace(
+        media_id=media_id,
+        workflow_id=workflow_id,
+        project_id=project_id,
+        is_done=True,
+        video_url="https://flow-content.google/image/poster-preview",
+        status=3,
+    )
+    monkeypatch.setattr(batchexecute, "parse_frames", lambda _body: [("as29s", [raw_record])])
+    monkeypatch.setattr(batchexecute, "generation_record", lambda _rpcid, _raw: record)
+
+    class FakeResponse:
+        url = "https://flow.google.com/_/data/batchexecute?rpcids=as29s"
+
+        async def text(self):
+            return "terminal migrated payload"
+
+    class FakePage:
+        def __init__(self):
+            self.handler = None
+
+        def on(self, event, handler):
+            assert event == "response"
+            self.handler = handler
+
+        def remove_listener(self, event, handler):
+            assert event == "response"
+            assert handler is self.handler
+
+        async def goto(self, url, wait_until, timeout):
+            assert url == f"https://flow.google.com/project/{project_id}"
+            assert wait_until == "domcontentloaded"
+            assert timeout == 45_000
+            await self.handler(FakeResponse())
+
+        async def reload(self, **_kwargs):
+            await self.handler(FakeResponse())
+
+        async def wait_for_timeout(self, _ms):
+            return None
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self):
+            self.page = FakePage()
+            self.transport = self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def _download_video(self, requested_media_id, out_dir, page):
+            assert page is self.page
+            target = out_dir / f"{requested_media_id}.mp4"
+            calls.append((requested_media_id, target))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"x" * 2048)
+            return target
+
+        async def download(self, *_args, **_kwargs):
+            raise AssertionError("migrated recovery must not download poster video_url")
+
+    monkeypatch.setattr(gflow_transport, "gflow_enabled", lambda: True)
+    monkeypatch.setattr(gflow_transport, "gflow_available", lambda: True)
+    monkeypatch.setattr(gflow_transport, "resolve_gflow_profile_dir", lambda: tmp_path / "profile")
+    monkeypatch.setattr(
+        gflow_transport,
+        "_flow_api_client",
+        lambda **_kwargs: FakeClient(),
+    )
+
+    flow = FlowCLIIntegration(tmp_path)
+
+    async def frame(_project_id, _scene_id, _video):
+        return "references/migrated/last-frame.jpg"
+
+    monkeypatch.setattr(flow, "_extract_last_frame", frame)
+
+    result = await flow._recover_submitted(project, scene)
+
+    assert calls
+    assert calls[0][0] == media_id
+    assert calls[0][1].name == f"{media_id}.mp4"
+    assert result is not None
+    assert result.job_id == media_id
+    assert result.upstream_project_id == project_id
+    assert result.last_frame_file == "references/migrated/last-frame.jpg"

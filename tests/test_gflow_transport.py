@@ -55,6 +55,237 @@ def test_gflow_migrated_ready_anchor_skips_hidden_duplicate(monkeypatch) -> None
     assert migrated_composer.READY_ANCHOR == ".settings-trigger-button:not([hidden])"
 
 
+@pytest.mark.asyncio
+async def test_gflow_migrated_prompt_clears_stale_draft_before_insert() -> None:
+    from gflow_cli.api.transports import migrated_composer
+
+    gflow_transport._apply_migrated_ui_compat()
+    events: list[tuple[str, object]] = []
+
+    class FakeLocator:
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return 1
+
+        async def fill(self, value):
+            events.append(("fill", value))
+
+        async def click(self, **kwargs):
+            events.append(("click", kwargs.get("timeout")))
+
+    class FakeKeyboard:
+        async def insert_text(self, value):
+            events.append(("insert", value))
+
+    class FakePage:
+        keyboard = FakeKeyboard()
+
+        def locator(self, selector):
+            assert selector == migrated_composer.COMPOSER
+            return FakeLocator()
+
+        async def wait_for_timeout(self, value):
+            events.append(("wait", value))
+
+    await migrated_composer.MigratedComposer().send_prompt(
+        FakePage(),
+        "fresh migrated prompt",
+    )
+
+    assert events == [
+        ("fill", ""),
+        ("wait", 50),
+        ("click", 5000),
+        ("insert", "fresh migrated prompt"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_windows_migrated_client_skips_cookie_preread(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from gflow_cli.api import client as client_module
+
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self._preread_flow_cookies = {"stale": "value"}
+
+        async def _preread_flow_session_cookies(self):
+            calls.append("base")
+
+    monkeypatch.setattr(client_module, "FlowApiClient", FakeClient)
+    monkeypatch.setattr(gflow_transport.sys, "platform", "win32")
+
+    client = gflow_transport._flow_api_client(
+        profile_dir=tmp_path / "profile",
+        headless=False,
+        out_dir=tmp_path / "out",
+    )
+    await client._preread_flow_session_cookies()
+
+    assert calls == []
+    assert client._preread_flow_cookies == {}
+    assert client.kwargs["profile_dir"] == tmp_path / "profile"
+
+
+def test_gflow_i2v_staging_uses_unique_filename_and_preserves_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "reference.jpg"
+    source.write_bytes(b"reference-bytes")
+
+    first = gflow_transport._stage_unique_i2v_frame(
+        tmp_path,
+        "project-1",
+        "SCENE_001",
+        source,
+    )
+    second = gflow_transport._stage_unique_i2v_frame(
+        tmp_path,
+        "project-1",
+        "SCENE_001",
+        source,
+    )
+
+    assert first != second
+    assert first.name.startswith("SCENE_001-")
+    assert second.name.startswith("SCENE_001-")
+    assert first.suffix == ".jpg"
+    assert second.suffix == ".jpg"
+    assert first.read_bytes() == b"reference-bytes"
+    assert second.read_bytes() == b"reference-bytes"
+
+
+def test_gflow_i2v_staging_cleanup_removes_attempt_file(tmp_path: Path) -> None:
+    source = tmp_path / "reference.png"
+    source.write_bytes(b"png-bytes")
+    staged = gflow_transport._stage_unique_i2v_frame(
+        tmp_path,
+        "project-1",
+        "SCENE_001",
+        source,
+    )
+
+    gflow_transport._cleanup_staged_i2v_frame(staged, tmp_path)
+
+    assert not staged.exists()
+    assert not (tmp_path / ".gflow-staging").exists()
+
+
+@pytest.mark.asyncio
+async def test_gflow_migrated_upload_uses_stabilized_mouse_filechooser(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from gflow_cli.api.transports import migrated_composer
+
+    media_id = "615ad30b-d653-40a7-b81e-37a96ddb5442"
+    project_id = "5fa6b591-8d1c-4a59-9106-2b930a4661f2"
+    image = tmp_path / "reference.jpg"
+    image.write_bytes(b"jpg")
+
+    monkeypatch.setattr(migrated_composer, "_rpcid", lambda _url: migrated_composer.UPLOAD_RPC)
+    monkeypatch.setattr(migrated_composer, "_first_uuid", lambda _body: media_id)
+
+    class FakeResponse:
+        url = "https://flow.google.com/data/batchexecute?rpcids=maseQ"
+        status = 200
+
+        async def text(self):
+            return "reply"
+
+    class FakeChooser:
+        files: list[str] = []
+
+        async def set_files(self, value):
+            self.files.append(value)
+            await page.response_callback(FakeResponse())
+
+    chooser = FakeChooser()
+
+    class FakeChooserContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        @property
+        def value(self):
+            return _async_value(chooser)
+
+    class FakeLocator:
+        def __init__(self, kind):
+            self.kind = kind
+
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return 1
+
+        async def click(self, **_kwargs):
+            return None
+
+        async def wait_for(self, **_kwargs):
+            return None
+
+        async def bounding_box(self):
+            return {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}
+
+    class FakeMouse:
+        clicks: list[tuple[float, float]] = []
+
+        async def click(self, x, y):
+            self.clicks.append((x, y))
+
+    class FakeKeyboard:
+        async def press(self, _key):
+            return None
+
+    class FakePage:
+        mouse = FakeMouse()
+        keyboard = FakeKeyboard()
+        response_callback = None
+        removed = False
+
+        def on(self, event, callback):
+            assert event == "response"
+            self.response_callback = callback
+
+        def remove_listener(self, event, callback):
+            assert event == "response"
+            assert callback is self.response_callback
+            self.removed = True
+
+        def locator(self, selector):
+            if selector == migrated_composer.TOOLBAR_ADD:
+                return FakeLocator("add")
+            if selector == migrated_composer.UPLOAD_MENU_ITEM:
+                return FakeLocator("upload")
+            raise AssertionError(selector)
+
+        async def wait_for_timeout(self, _ms):
+            return None
+
+        def expect_file_chooser(self, **_kwargs):
+            return FakeChooserContext()
+
+    page = FakePage()
+    result = await gflow_transport._upload_via_toolbar_mouse_compat(
+        object(), page, project_id, image
+    )
+
+    assert result == media_id
+    assert page.mouse.clicks == [(60.0, 40.0)]
+    assert chooser.files == [str(image)]
+    assert page.removed is True
+
+
 async def _async_value(value):
     return value
 
@@ -195,6 +426,9 @@ async def test_gflow_reference_image_uses_i2v_start_frame(
             on_started,
         ):
             captured["req"] = req
+            captured["staged_exists_during"] = req.start_image.is_file()
+            captured["staged_bytes"] = req.start_image.read_bytes()
+            captured["staged_name"] = req.start_image.name
             on_started(
                 SimpleNamespace(
                     media_id="media-i2v",
@@ -234,7 +468,14 @@ async def test_gflow_reference_image_uses_i2v_start_frame(
 
     req = captured["req"]
     assert req.mode is Mode.I2V
-    assert req.start_image == reference.resolve()
+    assert req.start_image != reference.resolve()
+    assert req.start_image.parent.name == scene.id
+    assert req.start_image.name.startswith(f"{scene.id}-")
+    assert req.start_image.suffix == ".png"
+    assert captured["staged_exists_during"] is True
+    assert captured["staged_bytes"] == reference.read_bytes()
+    assert not req.start_image.exists()
+    assert not (tmp_path / ".gflow-staging").exists()
 
 
 @pytest.mark.asyncio
@@ -253,11 +494,10 @@ async def test_explicit_gflow_transport_fails_closed_without_gflow(
 
 
 @pytest.mark.asyncio
-async def test_gflow_reference_image_generation_uses_image_transport(
+async def test_gflow_reference_image_generation_uses_migrated_ui_transport(
     monkeypatch, tmp_path: Path
 ) -> None:
     from gflow_cli.api import client as client_module
-    from gflow_cli.api.image import Aspect, Model
 
     monkeypatch.setenv("FLOW_VIDEO_TRANSPORT", "gflow")
     profile = tmp_path / "gflow-profile"
@@ -277,38 +517,41 @@ async def test_gflow_reference_image_generation_uses_image_transport(
         async def __aexit__(self, *_args):
             return None
 
-        async def generate_image(self, *, project_id, req, count):
-            captured["project_id"] = project_id
-            captured["req"] = req
-            captured["count"] = count
-            return [
-                SimpleNamespace(
-                    media_name="image-media-1",
-                    fife_url="https://flow-content.google/example",
-                )
-            ]
-
-        async def download_image(self, image, out_path):
-            captured["image"] = image
+        async def download(self, source, out_path):
+            captured["source"] = source
             Path(out_path).write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 128)
             return Path(out_path)
 
+    async def fake_drive(client, project, prompt, *, model_name, timeout_s):
+        captured["project"] = project
+        captured["prompt"] = prompt
+        captured["model_name"] = model_name
+        captured["timeout_s"] = timeout_s
+        return (
+            "https://flow-content.google/image/"
+            "92c92488-c530-4a64-8e44-43ad323cc8d4?Signature=redacted",
+            "92c92488-c530-4a64-8e44-43ad323cc8d4",
+        )
+
     monkeypatch.setattr(client_module, "FlowApiClient", FakeClient)
+    monkeypatch.setattr(
+        gflow_transport, "_drive_migrated_reference_image", fake_drive
+    )
     flow = FlowCLIIntegration(tmp_path)
+    project = _project()
+    project.flow_project_id = "5fa6b591-8d1c-4a59-9106-2b930a4661f2"
 
     relative = await flow.generate_reference_image(
-        "flow-project-1",
+        project,
         "CHAR_001",
         "canonical portrait, neutral background",
     )
 
-    req = captured["req"]
-    assert req.aspect is Aspect.SQUARE
-    assert req.model is Model.GEM_PIX_2
-    assert req.count == 1
-    assert captured["count"] == 1
-    assert captured["project_id"] == "flow-project-1"
-    assert relative == "references/flow-project-1/entities/CHAR_001.png"
+    assert captured["project"] is project
+    assert captured["prompt"] == "canonical portrait, neutral background"
+    assert captured["model_name"] == "nano-pro"
+    assert str(captured["source"]).startswith("https://flow-content.google/image/")
+    assert relative == f"references/{project.id}/entities/CHAR_001.png"
     assert (tmp_path / relative).is_file()
 
 

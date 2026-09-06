@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from .browser import (
 )
 from .errors import FlowIntegrationError, RenderCheckpoint
 from .recovery import wait_for_browser_video
+
+logger = logging.getLogger(__name__)
 
 
 async def _generate_with_existing_chrome(
@@ -110,7 +113,7 @@ def _reference_path(self, value: str) -> str | None:
 
 
 async def generate_reference_image(
-    self, project_id: str, reference_id: str, prompt: str
+    self, project: Project, reference_id: str, prompt: str
 ) -> str:
     """Generate and download one canonical reference image through Google Flow."""
     from .gflow_transport import (
@@ -126,7 +129,7 @@ async def generate_reference_image(
             )
         return await generate_reference_image_with_gflow(
             self,
-            project_id,
+            project,
             reference_id,
             prompt,
         )
@@ -176,7 +179,7 @@ async def generate_reference_image(
             raise FlowIntegrationError("Google Flow không trả về reference image tải được")
         from flow_cli._downloader import download_file
 
-        target = self.data_root / "references" / project_id / "entities" / f"{reference_id}.png"
+        target = self.data_root / "references" / project.id / "entities" / f"{reference_id}.png"
         target.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(
             download_file, image.fife_url, target, cookies=cookies, kind="image"
@@ -284,8 +287,8 @@ async def generate(
             )
             try:
                 completed.status = "SUCCEEDED"
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Best-effort status update after browser poll success: %s", exc)
         else:
             if not getattr(job, "is_success", False):
                 completed = await client.wait_for_video(

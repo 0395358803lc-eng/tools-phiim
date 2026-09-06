@@ -223,13 +223,14 @@ async def test_reference_image_generation_downloads_canonical_asset(
 
     monkeypatch.setattr(_downloader, "download_file", fake_download)
 
+    project = analyze_story(AnalyzeRequest(name="legacy reference", original_text=SCRIPT))
     relative = await flow.generate_reference_image(
-        "project-1",
+        project,
         "CHAR_001",
         "canonical reference",
     )
 
-    assert relative == "references/project-1/entities/CHAR_001.png"
+    assert relative == f"references/{project.id}/entities/CHAR_001.png"
     assert (tmp_path / relative).read_bytes() == b"reference"
 
 
@@ -248,8 +249,9 @@ async def test_reference_image_generation_fails_closed_without_downloadable_imag
 
     monkeypatch.setattr(flow, "_client", lambda _cookies: FakeClient())
 
+    project = analyze_story(AnalyzeRequest(name="legacy reference fail", original_text=SCRIPT))
     with pytest.raises(Exception, match="reference image"):
-        await flow.generate_reference_image("project-1", "CHAR_001", "reference")
+        await flow.generate_reference_image(project, "CHAR_001", "reference")
 
 
 @pytest.mark.asyncio
