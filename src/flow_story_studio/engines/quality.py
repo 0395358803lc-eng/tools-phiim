@@ -8,7 +8,7 @@ from ..models import QualityReport, Scene
 def score_scene(scene: Scene, threshold: int) -> QualityReport:
     deductions = min(25, len(scene.warnings) * 5)
     prompt_complete = all(
-        label in scene.flow_prompt
+        label in scene.render_prompt
         for label in ("Character:", "Location:", "Action:", "Start frame:", "End frame:")
     )
     story = 98 if scene.action and scene.source_text else 75

@@ -53,10 +53,27 @@ def compile_render_contract(
         ],
         "required_voiceover": scene.voiceover,
         "audio_locks": audio_lock,
+        "audio_plan": (
+            audio_lock.get("scene_audio_plan", {})
+            if isinstance(audio_lock, dict)
+            else {}
+        ),
         "camera_plan": scene.camera,
         "lighting_plan": scene.lighting,
         "atmosphere": scene.atmosphere,
         "duration": scene.duration,
+        "image_plan": scene.image_plan.model_dump(
+            mode="json",
+            exclude={
+                "status",
+                "renderer_status",
+                "start_frame_source",
+                "reference_status",
+                "approved_reference_images",
+                "generated_start_frame",
+                "generated_target_frame",
+            },
+        ),
         "expected_exit_state": scene.end_state.model_dump(mode="json"),
         "lock_mode": "strict",
         "allowed_variation": [

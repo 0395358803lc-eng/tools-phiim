@@ -1,167 +1,181 @@
 # TH Media
 
-Ứng dụng Windows desktop biến một văn bản dài thành **story world → story bible → timeline → storyboard → Google Flow prompts → chuỗi video** có continuity. Giao diện chạy trong cửa sổ riêng bằng WebView2. Backend nội bộ nằm trong EXE; Google Flow dùng duy nhất Python Flow CLI tích hợp cùng phiên xác thực được lưu mã hóa trên máy.
+TH Media là ứng dụng Windows desktop cho pipeline sản xuất phim theo hướng continuity-first:
 
-## Tính năng đã triển khai
+```text
+Screenplay
+→ Analysis
+→ Semantic Finalization
+→ Canonical Film Model
+→ Scene Intent
+→ State Delta
+→ Visual Bible
+→ Scene Contract
+→ Render Queue
+→ Render Provider Interface
+→ QC
+→ Production Acceptance
+→ Accepted Runtime State
+→ Final Merge
+```
 
-- Giao diện ba cột: Project/Bible, Storyboard kéo-thả, Scene Editor.
-- Quy trình desktop ba bước bắt buộc: chọn thư mục làm việc → phân tích nội dung → sản xuất video.
-- Mỗi lần mở EXE là một phiên mới và không tự nạp project cũ; project đã lưu chỉ được mở khi người dùng chủ động chọn **Mở đã lưu**.
-- Giao diện desktop responsive: ba cột trên màn hình rộng, tự chuyển thành ba vùng có nút điều hướng khi cửa sổ hẹp; hỗ trợ từ 680×520 mà không tràn trang.
-- Phân tích offline toàn bộ nội dung trước khi chia cảnh.
-- Chọn engine phân tích Offline hoặc xKiro; toàn bộ catalog model khả dụng được tải live và phân loại Free/Paid/Premium.
-- Bộ tiền xử lý kịch bản có cấu trúc loại tiêu đề Markdown, metadata, Character Bible và nhãn kỹ thuật khỏi các scene hình ảnh; chặn thực thể rác như `ft`, `Giọng`, `Voice` và camera label.
-- Pipeline xKiro dài hạn không dùng timeout tổng: Story Bible được đọc tuần tự theo phần, scene được duyệt theo lô thích ứng với context/output của model và mọi request có timeout/retry riêng.
-- Checkpoint SQLite giao dịch được lưu sau từng phần Story Bible và từng lô scene; lỗi mạng, model quá tải, đóng ứng dụng hoặc chạy lại không làm mất các phần đã hoàn tất.
-- Checkpoint scene-level được ghi ngay sau từng cảnh sửa. Model trả object cảnh đơn, mảng, mapping hoặc alias field đều được chuẩn hóa; phần còn thiếu được sửa tuần tự thay vì chạy lại cả lô.
-- xKiro `duplicate request already being processed` có hàng chờ riêng, không tiêu thụ retry. Trạng thái dedupe stale được đổi chữ ký phục hồi có giới hạn để không khóa dự án vĩnh viễn.
-- Continuity thật sự nối dây chuyền: `start_state` của scene sau được khóa bằng chính `end_state` AI đã duyệt của scene trước; cảnh thiếu trường bắt buộc sẽ được yêu cầu model sửa thay vì âm thầm coi là hoàn tất.
-- Mọi scene sau phân tích bật **AI Continuity Lock**: backend khóa Location, nhân vật, nội dung, hành động, camera, ánh sáng, không khí, prompt và start/end state. Người dùng phải chủ động mở khóa scene trước khi sửa.
-- Nhật ký phân tích theo thời gian thực hiển thị model, từng giai đoạn xử lý, thời gian chờ, kết quả hoặc lỗi; có thể sao chép, xóa và hủy tác vụ.
-- Character, Location và Prop Bible với ID ổn định.
-- Chia scene theo câu, nhịp kể, transition và ngân sách voiceover.
-- Master Project Prompt, Global Visual Style, Visual Prompt và Google Flow Prompt.
-- Start frame/End frame, continuity state, auto continuity và cảnh báo downstream khi sửa scene.
-- Chỉnh nội dung, location, camera, ánh sáng, voiceover, prompt và duration từng scene.
-- Queue render tuần tự; Generate Selected/All, Pause, Resume và Retry qua nút Generate scene.
-- Google Flow dùng duy nhất Flow CLI tích hợp để render, tạo reference image và recovery. Kết quả MP4 được tải về workspace và đi qua cùng QC/Acceptance.
-- Nếu API tải media của Flow trả sai preview hoặc CDN từ chối, Studio tự phục hồi MP4 qua phiên Chromium đã đăng nhập, kiểm tra container rồi mới đánh dấu scene hoàn tất.
-- Flow project ID và workflow/media ID được lưu ngay khi gửi lệnh; tác vụ gián đoạn có thể tiếp tục tải kết quả mà không tạo lại video. `Generate all` bỏ qua scene đã hoàn tất.
-- API key xKiro và phiên xác thực Flow CLI được mã hóa bằng Windows DPAPI; cookie/runtime không được commit vào Git.
-- Chọn model Veo, xem trạng thái xác thực/credit, gắn ảnh tham chiếu và phát video ngay trên scene.
-- Trình phát giữ nguyên thẻ media, thời điểm phát và bộ đệm khi hàng đợi polling tiến độ; các scene tiếp theo có thể render mà không làm video đang xem tải lại liên tục.
-- Tự trích last frame bằng FFmpeg và chuyển thành reference image cho scene kế tiếp.
-- Khi mọi scene có MP4 hoàn chỉnh, nút **Ghép video** sẽ bật. Studio ghép theo đúng thứ tự storyboard, mã hóa H.264/AAC tương thích, phát trực tiếp và cho tải một MP4 duy nhất.
-- Quality report 0–100 sau mỗi render, ngưỡng mặc định 85.
-- Lưu project JSON nguyên tử, mở lại project gần đây, export JSON và ZIP chứa prompt từng scene.
-- Backend FastAPI chỉ lắng nghe loopback trên một cổng ngẫu nhiên khi chạy desktop.
+Hiện core **không đóng gói render backend mặc định**. Kiến trúc render vẫn được giữ nguyên để tích hợp renderer mới qua `ProviderRegistry` mà không thay đổi analysis/QC/acceptance pipeline.
 
-## Chạy nhanh trên Windows
+## Thành phần chính
+
+- Phân tích offline hoặc xKiro.
+- Canonical Film Model, Visual Bible, Audio Bible và Scene Contract.
+- AI Continuity Lock và kiểm tra continuity.
+- RenderQueue tuần tự, Pause/Resume/Retry.
+- Provider-neutral `VideoProvider` và `ReferenceProvider`.
+- Visual QC, Audio QC, Continuity QC và Production Gate fail-closed.
+- FFmpeg media tools, final merge và chống video trùng lặp.
+- Project JSON có versioned migration và backup.
+- Windows desktop WebView2 + FastAPI loopback.
+
+## Render engine
+
+Trạng thái mặc định:
+
+```text
+Render Provider Interface
+→ No render backend configured
+```
+
+`GET /api/render/status` trả trạng thái provider hiện tại. Khi chưa có backend, app vẫn healthy và analysis/project/continuity vẫn hoạt động bình thường.
+
+Các nút Generate scene/selected/all được giữ trong UI nhưng bị khóa khi renderer chưa được cấu hình. API generate trả lỗi controlled `409 Conflict` trước khi đưa scene vào queue.
+
+Provider mới chỉ cần đăng ký vào registry và trả về kết quả generic:
+
+```python
+RenderResult(
+    job_id=...,
+    result_url=...,
+    result_file=...,
+    last_frame_file=...,
+)
+```
+
+Sau đó kết quả tiếp tục đi qua media extraction, QC, Production Acceptance và Final Merge hiện có.
+
+## Scene Image Continuity Plan
+
+Mỗi scene có một `image_plan` được biên dịch từ Visual Bible và continuity state trước khi nối image renderer thật.
+
+- Character/Location/Prop Master Reference là tài sản cấp Project trong `Visual Bible`; mỗi entity có đúng một Master đang được duyệt và mọi scene chỉ reuse Master đó.
+- Scene output frame không bao giờ được tự promote thành Character/Location/Prop Master. Master phải được tạo/tải ở cấp Project và qua Vision QC.
+- Opening/canonical scene dùng `canonical_reanchor`: tạo composition mới bằng cách REUSE các Master đã Approved; không được thiết kế lại khuôn mặt, location hoặc prop.
+- Direct scene dùng `previous_accepted_end_frame`: frame cuối Accepted của scene trước là physical start-frame anchor, còn Project Masters vẫn là identity/world guards.
+- Mỗi scene có thêm target/end keyframe prompt từ cùng bộ Master để khóa trạng thái cuối cảnh cho renderer hỗ trợ start/end image sau này.
+- Nếu Master Reference bắt buộc chưa được duyệt, Image Plan ở trạng thái `Blocked`.
+- Upload Master dùng xKiro Vision fail-closed: chỉ đạt ngưỡng và không có error mới chuyển sang `approved`; nếu Vision chưa khả dụng thì chỉ là `candidate`.
+- Khi một Master được thay bằng phiên bản mới đã duyệt, mọi scene phụ thuộc và direct-continuation downstream bị invalidate media evidence cũ để không trộn hai phiên bản identity/world.
+- Đường dẫn ảnh, trạng thái approved và file runtime không nằm trong semantic Scene Contract; chúng được bind động để không làm stale AI lock.
+- Nếu semantic plan thay đổi (nhân vật, location, action, camera, lighting, state...), ảnh scene đã tạo trước đó bị invalidated.
+- UI `Project → Bible` là Master Reference Library; UI `Scene editor → Tạo ảnh` chỉ hiển thị REUSE MASTER, strategy, anchor, identity/composition locks, start-frame prompt và target-frame prompt.
+
+## Chạy trên Windows
 
 ```powershell
-cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
+cd C:\Users\Admin\Desktop\phim\tools-phiim
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-`setup.ps1` cài Python dependencies, wheel Flow CLI đã vendored và Playwright Chromium. Sau đó `start.ps1` mở **TH Media**. Trước tiên, ứng dụng yêu cầu chọn hoặc tạo thư mục làm việc. Các thư mục `projects`, `renders` và `references`
-sẽ được tạo bên trong thư mục này. Kho xác thực dùng chung nằm trong vùng dữ liệu người dùng của
-TH Media và được Windows mã hóa. Không cần chạy `flow api serve` và không cần mở
-trình duyệt thủ công.
+`setup.ps1` chỉ cài dependency thật sự của TH Media. Playwright là dev dependency cho browser E2E của chính ứng dụng, không phải runtime renderer.
 
-Nếu muốn cài thủ công:
+## xKiro analysis
 
-```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install .\vendor\flow_cli-0.6.0-py3-none-any.whl -e ".[dev]"
-.venv\Scripts\python.exe -m playwright install chromium
-.venv\Scripts\python.exe -m flow_story_studio.desktop
-```
-
-## Render thật qua Google Flow
-
-Google Flow được cấu hình ở bước **Thiết lập video**, chỉ mở sau khi nội dung đã phân tích xong.
-
-Luồng chính:
-
-1. Chạy `setup.ps1` để cài Flow CLI và Playwright Chromium.
-2. Mở TH Media, chọn Google Flow và kết nối phiên Flow CLI bằng cookie/cookies.json.
-3. Nhấn **Kiểm tra** để xác thực phiên và đọc credit/model.
-4. Chọn model rồi Generate scene/selected/all.
-
-Thông tin xác thực Flow CLI không được trả lại frontend, không lưu trong project JSON và được DPAPI mã hóa theo tài khoản Windows hiện tại. Không nhập email hay mật khẩu Google vào Studio.
-
-Các biến môi trường tùy chọn:
-
-```powershell
-$env:FLOW_RENDER_TIMEOUT = "900"
-```
-
-Video được lưu trong thư mục `renders` thuộc thư mục làm việc đã chọn khi mở ứng dụng.
-Sau khi toàn bộ scene render thành công, nhấn **Ghép video → Ghép toàn bộ video**. Tệp tổng được
-lưu tại `renders/<project-id>/final/final-video.mp4`. Nếu render lại một scene hoặc đổi thứ tự
-storyboard, kết quả tổng cũ sẽ được đánh dấu cần ghép lại để tránh dùng nhầm phiên bản.
-
-## Build EXE Windows
-
-```powershell
-cd C:\Users\Admin\Desktop\tools-phim\flow-story-studio
-powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
-```
-
-Kết quả: `dist\THMedia.exe`. Bản one-file chứa Python Flow CLI, Chromium Playwright, giao diện và FFmpeg; không cần Node.js/npm hoặc transport phụ.
-
-## Phân tích nội dung bằng xKiro
-
-Trong bước **Phân tích nội dung**:
+Trong bước Phân tích nội dung:
 
 1. Chọn `Analysis provider → xKiro API`.
-2. Nhấn **Thêm API key**, nhập key xKiro và chọn **Lưu API key mới**.
-3. Chọn bất kỳ model nào trong catalog vừa tải (Free, Paid hoặc Premium).
-4. Nhấn **Phân tích nội dung**.
+2. Nhập API key và tải catalog model.
+3. Chọn riêng model AI phân tích nội dung.
+4. Chọn riêng model AI Vision cho Visual QC/Continuity QC; UI chỉ liệt kê model có `capabilities.vision=true`.
+5. Chạy phân tích.
 
-Studio gọi catalog live `GET https://api.xkiro.com/v1/models` và hiển thị toàn bộ model tài khoản có thể thấy;
-danh sách không bị hard-code. Model Paid/Premium có thể phát sinh phí theo chính sách xKiro. Key được xác thực qua backend local, mã hóa
-bằng Windows DPAPI và tự dùng lại trong phiên sau; key không được lưu vào project hoặc trả lại cho trình duyệt. Chỉ bấm **Thêm mới / Thay đổi** khi muốn thay key. Có thể
-cấu hình key từ môi trường trước khi chạy nếu muốn:
+`vision_model` được lưu trong settings của project và được dùng bắt buộc cho QC 5 frame, QC continuity giữa hai clip trực tiếp và QC reference image. Nếu model Vision đã chọn không còn khả dụng hoặc mất capability Vision, QC fail-closed thay vì âm thầm đổi model.
 
-```powershell
-$env:XKIRO_API_KEY = "your-key"
-$env:XKIRO_REQUEST_TIMEOUT = "900"       # timeout cho MỖI request, không phải toàn job
-$env:XKIRO_REQUEST_RETRIES = "4"          # tự thử lại lỗi timeout/429/5xx
-$env:XKIRO_SCENE_BATCH_SIZE = "6"         # tự hạ nếu context/output model nhỏ
-powershell -ExecutionPolicy Bypass -File .\start.ps1
-```
+Key được lưu bằng Windows DPAPI, không ghi vào project JSON. Pipeline xKiro dùng checkpoint để tiếp tục công việc dài, sau đó vẫn đi qua cùng Semantic Finalization, Canonical Film Model và Scene Contract.
 
-Khi dùng xKiro, engine offline tạo canonical ID ban đầu; model đã chọn đọc toàn bộ nội dung để
-hoàn thiện Story Bible, Character/Location/Prop Bible, scene action, camera, thoại và continuity
-state. Kết quả vẫn đi qua cùng Continuity Engine và Prompt Generation Engine của ứng dụng.
-Mọi độ dài đều đi qua cùng pipeline có giới hạn bộ nhớ theo request. Nội dung tối đa 5.000.000 ký tự;
-Story Bible được cập nhật tuần tự qua các phần tối đa theo context của model, sau đó scene được duyệt
-theo lô 1–8 cảnh. Checkpoint nằm trong `analysis-checkpoints` của thư mục làm việc và tự xóa sau khi
-project cuối đã được ghi thành công. Nếu cùng nội dung/model/thiết lập được chạy lại sau lỗi, Studio
-tự nhận checkpoint và tiếp tục phần còn thiếu.
-Trong Scene Editor, nút **AI đã khóa** cho biết các trường đang được bảo vệ. Chỉ bấm mở khóa khi
-thực sự cần sửa thủ công; sau khi sửa nên khóa lại và chạy **Auto continuity** trước khi render.
-
-API local liên quan:
+API liên quan:
 
 - `GET /api/ai/xkiro/status`
 - `POST /api/ai/xkiro/connect`
 - `GET /api/ai/xkiro/models`
+- `GET /api/ai/xkiro/models?vision_only=true`
 - `DELETE /api/ai/xkiro`
 - `POST /api/analysis/jobs`
 - `GET /api/analysis/jobs/{job_id}`
 - `DELETE /api/analysis/jobs/{job_id}`
 
-## Chạy kiểm thử
+## Google Flow browser session
+
+Nút trạng thái Google Flow trên thanh trên cùng quản lý phiên đăng nhập bằng Chrome profile riêng, không dùng Flow CLI và không import/export cookie.
+
+- Lần đầu bấm khi chưa có phiên: TH Media tạo một pending Chrome profile và mở `https://labs.google/fx/tools/flow`.
+- Người dùng tự đăng nhập Google trong Chrome. TH Media không nhận, đọc hoặc lưu mật khẩu Google.
+- Sau khi đăng nhập xong, bấm `Xác nhận dùng phiên mới` để chuyển pending profile thành active.
+- Khi tạo phiên mới trong lúc đã có active session, active cũ vẫn giữ nguyên cho đến lúc xác nhận profile mới; nếu hủy, active cũ không đổi.
+- Renderer Google Flow sau này sẽ lấy profile active qua `GoogleFlowSessionManager.active_profile_dir()`.
+- Trạng thái session được lưu trong workspace tại `browser-sessions/google-flow`; dữ liệu đăng nhập thực tế do Chrome quản lý bên trong profile riêng.
+
+API:
+
+- `GET /api/google-flow/session`
+- `POST /api/google-flow/session/new`
+- `POST /api/google-flow/session/open`
+- `POST /api/google-flow/session/pending/open`
+- `POST /api/google-flow/session/pending/activate`
+- `DELETE /api/google-flow/session/pending`
+
+## Kiểm thử
 
 ```powershell
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m pytest
+.venv\Scripts\python.exe -m pytest --cov=flow_story_studio
 .venv\Scripts\python.exe -m ruff check .
+.venv\Scripts\python.exe -m pip check
+node --check static\app.js
+```
+
+Browser E2E:
+
+```powershell
+.venv\Scripts\python.exe -m playwright install chromium
+.venv\Scripts\python.exe scripts\browser-e2e.py
 ```
 
 ## Cấu trúc
 
 ```text
 src/flow_story_studio/
-├── engines/              # analyze, segment, prompt, continuity, quality
-├── providers/            # contract và mock provider
-├── flow_integration.py   # Flow CLI transport + recovery/download
-├── desktop.py            # cửa sổ Windows WebView2 + backend loopback
-├── main.py               # các route nội bộ + static UI
-├── models.py             # canonical project schema
-├── render_queue.py       # sequential render orchestration
-├── video_merger.py       # kiểm tra scene + ghép MP4 bằng FFmpeg
-├── service.py            # application use cases
-└── storage.py            # atomic JSON persistence
-static/                   # giao diện web nội bộ
-vendor/                   # Python Flow CLI wheel vendored
-tests/                    # engine, storage, API tests
-data/projects/            # project runtime (không commit)
+├── analysis_providers/
+├── engines/
+├── film/
+├── providers/
+│   ├── base.py
+│   ├── mock.py
+│   ├── reference.py
+│   ├── registry.py
+│   └── unavailable.py
+├── media_tools.py
+├── reference_manager.py
+├── render_queue.py
+├── production_gate.py
+├── video_merger.py
+├── visual_qc.py
+├── audio_qc.py
+└── main.py
 ```
 
-## Giới hạn có chủ đích
+Tên package `flow_story_studio` và các biến runtime `FLOW_STUDIO_*` được giữ để tránh migration rủi ro; đây là tên ứng dụng legacy, không phải implementation của render provider.
 
-Engine offline dùng quy tắc ngôn ngữ nên phù hợp để chạy ngay và kiểm tra workflow. Tích hợp Google Flow là automation UI không chính thức thông qua Flow CLI. Google có thể thay đổi UI nên image/video/reference/recovery cần regression test sau mỗi lần cập nhật transport. Tài khoản vẫn phải có quyền sử dụng model/credit tương ứng.
+## Build EXE
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
+```
+
+Build bundle core, static UI và FFmpeg. Renderer tương lai phải được tích hợp riêng qua provider contract.

@@ -1,5 +1,6 @@
 from flow_story_studio.analysis_providers.semantic_orchestrator import (
     _is_direct_continuation,
+    ground_canonical_prop_appearance,
     mentioned_props,
     safe_prop_states,
 )
@@ -73,3 +74,32 @@ def test_torn_prop_becomes_fragments_and_persists_until_explicit_disposal() -> N
     )
     assert ticket.id in next_start
     assert "two physical pieces" in next_start[ticket.id]
+
+
+def test_ai_action_cannot_drift_from_canonical_prop_color() -> None:
+    script = """
+TARGET RUNTIME: 8 seconds
+
+NHÂN VẬT
+- KHẢI, nam, 35 tuổi.
+
+ĐẠO CỤ
+- Máy ghi âm nhỏ màu bạc, có một đèn LED đỏ.
+
+CẢNH 1 — BÊN NGOÀI NHÀ GA — ĐÊM
+Khải cất máy ghi âm vào túi áo.
+"""
+    project = analyze_story(
+        AnalyzeRequest(
+            name="canonical prop color",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    scene = project.scenes[0]
+    scene.action = "Khải cất máy ghi âm nhỏ màu đen vào túi áo trong."
+
+    ground_canonical_prop_appearance(scene, project.props)
+
+    assert "màu bạc" in scene.action
+    assert "màu đen" not in scene.action

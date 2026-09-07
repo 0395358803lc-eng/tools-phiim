@@ -12,6 +12,7 @@ from flow_story_studio.models import (
     ContinuityQCReport,
     FinalVideo,
     QualityReport,
+    VideoSettings,
     VisualQCReport,
 )
 from flow_story_studio.service import StudioService
@@ -30,7 +31,13 @@ TEXT = (
 
 
 def completed_project(storage: ProjectStorage, data_root: Path):
-    project = StudioService(storage).analyze(AnalyzeRequest(name="Final movie", original_text=TEXT))
+    project = StudioService(storage).analyze(
+        AnalyzeRequest(
+            name="Final movie",
+            original_text=TEXT,
+            settings=VideoSettings(provider="mock"),
+        )
+    )
     for index, scene in enumerate(project.scenes, start=1):
         clip = data_root / "renders" / project.id / scene.id / f"clip-{index}.mp4"
         clip.parent.mkdir(parents=True, exist_ok=True)
@@ -289,12 +296,12 @@ def test_merger_applies_audio_bible_normalization_when_all_clips_have_audio(
     assert command[command.index("-ac") + 1] == "2"
 
 
-def test_google_flow_final_merge_fails_closed_when_audio_stream_disappears(
+def test_production_renderer_final_merge_fails_closed_when_audio_stream_disappears(
     tmp_path: Path, monkeypatch
 ) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     project = completed_project(storage, tmp_path)
-    project.settings.provider = "google-flow"
+    project.settings.provider = "production-renderer"
     merger = VideoMerger(tmp_path)
     clips = [tmp_path / "clip-a.mp4", tmp_path / "clip-b.mp4"]
 

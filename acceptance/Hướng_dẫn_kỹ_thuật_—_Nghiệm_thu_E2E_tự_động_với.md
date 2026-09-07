@@ -43,7 +43,7 @@ Không được:
 - ghi API key vào command line;
 - ghi credential vào log;
 - copy `data/secrets` vào output;
-- xuất cookies Google Flow;
+- xuất cookies external render backend;
 - dùng mock provider thay cho xKiro rồi báo là nghiệm thu AI thật;
 - sửa kết quả AI trước khi xuất;
 - chỉ xuất screenshot thay cho dữ liệu gốc;
@@ -456,7 +456,7 @@ Request phải tương đương:
 }
 ```
 
-`provider: mock` ở đây chỉ có nghĩa **không render video Google Flow** trong bài nghiệm thu phân tích.
+`provider: mock` ở đây chỉ có nghĩa **không render video external render backend** trong bài nghiệm thu phân tích.
 
 Nó không được thay đổi:
 
@@ -669,7 +669,7 @@ visual_bible
 scenes
 continuity_score
 continuity_warnings
-flow_project_id
+provider_project_id
 final_video
 ```
 
@@ -895,7 +895,7 @@ kịch bản
 Không cần gọi:
 
 ```text
-Google Flow
+external render backend
 Veo
 video generation
 final-video merge

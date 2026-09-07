@@ -6,6 +6,7 @@ from flow_story_studio.models import (
     ContinuityQCReport,
     ProductionAcceptance,
     QualityReport,
+    VideoSettings,
     VisualQCReport,
 )
 
@@ -23,7 +24,13 @@ SCRIPT = (
 
 
 def _accepted_project():
-    project = analyze_story(AnalyzeRequest(name="production gate", original_text=SCRIPT))
+    project = analyze_story(
+        AnalyzeRequest(
+            name="production gate",
+            original_text=SCRIPT,
+            settings=VideoSettings(provider="mock"),
+        )
+    )
     scene = project.scenes[0]
     scene.status = "Accepted"
     scene.acceptance = ProductionAcceptance(status="Accepted", score=100)
@@ -92,7 +99,7 @@ def test_acceptance_score_must_equal_strict_component_floor() -> None:
 
 def test_unified_gate_rejects_render_settings_mismatch() -> None:
     project, scene = _accepted_project()
-    scene.render_provider = "google-flow"
+    scene.render_provider = "other-renderer"
 
     blockers = _gate().scene_production_blockers(project, scene)
 
@@ -105,6 +112,38 @@ def test_unified_gate_rejects_render_settings_mismatch() -> None:
     assert any("render model" in item for item in blockers)
 
 
+def test_production_gate_rejects_mismatched_selected_vision_model() -> None:
+    project, scene = _accepted_project()
+    project.settings.provider = "production-renderer"
+    project.settings.vision_model = "vision-selected"
+    scene.render_provider = "production-renderer"
+    scene.visual_qc.model_id = "vision-other"
+    scene.visual_qc.first_frame = "first.png"
+    scene.visual_qc.quarter_frame = "quarter.png"
+    scene.visual_qc.middle_frame = "middle.png"
+    scene.visual_qc.three_quarter_frame = "three-quarter.png"
+    scene.visual_qc.last_frame = "last.png"
+
+    blockers = _gate().scene_production_blockers(project, scene)
+
+    assert any("visual QC model does not match" in item for item in blockers)
+
+    scene.visual_plan.dependency_mode = "direct"
+    scene.continuity_qc = ContinuityQCReport(
+        status="Passed",
+        score=100,
+        character_match=100,
+        location_match=100,
+        wardrobe_match=100,
+        prop_state_match=100,
+        lighting_match=100,
+        screen_direction_match=100,
+        model_id="vision-other",
+    )
+    blockers = _gate().scene_production_blockers(project, scene)
+    assert any("direct continuity QC model does not match" in item for item in blockers)
+
+
 def test_unified_gate_requires_direct_continuity_evidence() -> None:
     project, scene = _accepted_project()
     scene.visual_plan.dependency_mode = "direct"
@@ -115,9 +154,10 @@ def test_unified_gate_requires_direct_continuity_evidence() -> None:
     assert any("direct continuity QC" in item for item in blockers)
 
 
-def test_google_flow_gate_requires_visual_boundary_evidence() -> None:
+def test_production_renderer_gate_requires_visual_boundary_evidence() -> None:
     project, scene = _accepted_project()
-    project.settings.provider = "google-flow"
+    project.settings.provider = "production-renderer"
+    scene.render_provider = "production-renderer"
     scene.visual_qc.model_id = "vision-model"
 
     blockers = _gate().scene_production_blockers(project, scene)
@@ -125,10 +165,10 @@ def test_google_flow_gate_requires_visual_boundary_evidence() -> None:
     assert any("five-frame evidence" in item for item in blockers)
 
 
-def test_google_flow_gate_requires_passing_audio_qc() -> None:
+def test_production_renderer_gate_requires_passing_audio_qc() -> None:
     project, scene = _accepted_project()
-    project.settings.provider = "google-flow"
-    scene.render_provider = "google-flow"
+    project.settings.provider = "production-renderer"
+    scene.render_provider = "production-renderer"
     scene.visual_qc.first_frame = "first.png"
     scene.visual_qc.quarter_frame = "quarter.png"
     scene.visual_qc.middle_frame = "middle.png"
@@ -153,3 +193,65 @@ def test_google_flow_gate_requires_passing_audio_qc() -> None:
     assert any("audio QC is Failed" in item for item in blockers)
     assert any("audio true peak" in item for item in blockers)
     assert not _gate().is_scene_production_ready(project, scene)
+
+
+
+def test_master_gate_uses_stricter_character_floor() -> None:
+    project, _scene = _accepted_project()
+    project.settings.vision_model = "vision-selected"
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    reference.status = "approved"
+    reference.approved_reference = "references/master.jpg"
+    reference.vision_model = "vision-selected"
+    reference.vision_score = 89
+    reference.vision_issues = []
+
+    blockers = _gate().master_reference_qc_blockers(project, reference)
+
+    assert any("below 90" in item for item in blockers)
+
+
+def test_master_gate_escalates_blocking_warning_code() -> None:
+    from flow_story_studio.models import VisualIssue
+
+    project, _scene = _accepted_project()
+    project.settings.vision_model = "vision-selected"
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    reference.status = "approved"
+    reference.approved_reference = "references/master.jpg"
+    reference.vision_model = "vision-selected"
+    reference.vision_score = 95
+    reference.vision_issues = [
+        VisualIssue(
+            code="background_contamination",
+            severity="warning",
+            message="Character is staged in a cinematic alley.",
+        )
+    ]
+
+    blockers = _gate().master_reference_qc_blockers(project, reference)
+
+    assert any("background_contamination" in item for item in blockers)
+
+
+def test_project_master_gate_requires_physical_files(tmp_path) -> None:
+    project, _scene = _accepted_project()
+    project.settings.vision_model = "vision-selected"
+    for index, reference in enumerate(project.visual_bible.references):
+        reference.status = "approved"
+        reference.vision_model = "vision-selected"
+        reference.vision_score = 95
+        reference.vision_issues = []
+        relative = f"references/master-{index}.jpg"
+        reference.approved_reference = relative
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"master")
+
+    assert _gate().project_master_blockers(project, data_root=tmp_path) == []
+
+    (tmp_path / project.visual_bible.references[0].approved_reference).unlink()
+    blockers = _gate().project_master_blockers(project, data_root=tmp_path)
+    assert any("approved image file is missing" in item for item in blockers)

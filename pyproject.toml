@@ -10,10 +10,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1.0",
-  "gflow-cli @ https://github.com/ffroliva/gflow-cli/archive/438f5cf68256947e92c3ed506e5d3046a4b66c14.zip",
   "httpx>=0.27,<1.0",
   "pydantic>=2.8,<3.0",
   "platformdirs>=4.0,<5.0",
+  "playwright>=1.55,<2.0",
+  "psutil>=7.0,<8.0",
   "pywebview>=5.4,<7.0",
   "uvicorn[standard]>=0.30,<1.0",
 ]
@@ -28,7 +29,6 @@ dev = [
   "pytest-cov>=5.0,<7.0",
   "ruff>=0.6",
   "httpx2>=2.12,<3.0",
-  "playwright>=1.55,<2.0",
   "pip-audit>=2.7,<3.0",
   "bandit>=1.7,<2.0",
   "pip-licenses>=5.0,<6.0",

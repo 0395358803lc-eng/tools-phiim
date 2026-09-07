@@ -105,7 +105,7 @@ def test_backup_restore_api_round_trip(tmp_path: Path) -> None:
         project_id = project["id"]
         changed = client.patch(
             f"/api/projects/{project_id}/video-settings",
-            json={"provider": "google-flow", "video_model": "veo-3.1-lite-lower-priority"},
+            json={"provider": "future-renderer", "video_model": "future-model"},
         )
         assert changed.status_code == 200
         backups = client.get(f"/api/projects/{project_id}/backups")
@@ -116,4 +116,4 @@ def test_backup_restore_api_round_trip(tmp_path: Path) -> None:
             f"/api/projects/{project_id}/backups/{backup_rows[0]['name']}/restore"
         )
         assert restored.status_code == 200
-        assert restored.json()["settings"]["provider"] == "mock"
+        assert restored.json()["settings"]["provider"] == "unconfigured"

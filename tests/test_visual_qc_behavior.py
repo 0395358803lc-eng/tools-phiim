@@ -16,9 +16,9 @@ class FakeVision:
         self.payload = payload
         self.calls = []
 
-    async def vision_json(self, images, prompt):
-        self.calls.append((list(images), prompt))
-        return self.payload, "vision-test"
+    async def vision_json(self, images, prompt, *, model_id=""):
+        self.calls.append((list(images), prompt, model_id))
+        return self.payload, model_id or "vision-test"
 
 
 def make_project(tmp_path):
@@ -199,3 +199,78 @@ async def test_continuity_qc_rejects_low_component_despite_high_overall_score(
         issue.code == "CONTINUITY_PROP_STATE_MATCH_BELOW_THRESHOLD"
         for issue in report.issues
     )
+
+
+
+async def test_project_master_qc_uses_downstream_component_floor(tmp_path):
+    project, _scene = make_project(tmp_path)
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    target = tmp_path / "references" / "master.jpg"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"image")
+    vision = FakeVision(
+        {
+            "spec_match": 96,
+            "identity_clarity": 94,
+            "downstream_reusability": 72,
+            "transient_state_control": 93,
+            "continuity_safety": 91,
+            "score": 95,
+            "issues": [],
+        }
+    )
+    analyzer = VisualQCAnalyzer(tmp_path, vision)
+
+    score, issues = await analyzer.inspect_reference_for_project(
+        project,
+        reference,
+        "references/master.jpg",
+        model_id="vision-test",
+    )
+
+    assert score == 72
+    assert any(
+        issue.code == "MASTER_DOWNSTREAM_REUSABILITY_BELOW_THRESHOLD"
+        and issue.severity == "error"
+        for issue in issues
+    )
+    assert "DOWNSTREAM SCENES THAT WILL REUSE THIS MASTER" in vision.calls[0][1]
+
+
+async def test_project_master_qc_escalates_character_background_warning(tmp_path):
+    project, _scene = make_project(tmp_path)
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    target = tmp_path / "references" / "master.jpg"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"image")
+    vision = FakeVision(
+        {
+            "spec_match": 95,
+            "identity_clarity": 95,
+            "downstream_reusability": 95,
+            "transient_state_control": 95,
+            "continuity_safety": 95,
+            "score": 95,
+            "issues": [
+                {
+                    "code": "background_contamination",
+                    "severity": "warning",
+                    "message": "A story-specific alley is visible.",
+                }
+            ],
+        }
+    )
+    analyzer = VisualQCAnalyzer(tmp_path, vision)
+
+    score, issues = await analyzer.inspect_reference_for_project(
+        project,
+        reference,
+        "references/master.jpg",
+        model_id="vision-test",
+    )
+
+    assert score == 95
+    issue = next(item for item in issues if item.code == "background_contamination")
+    assert issue.severity == "error"

@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from flow_story_studio.engines.analyzer import analyze_story
-from flow_story_studio.flow_integration.generation import _prompt
 from flow_story_studio.models import (
     AnalyzeRequest,
     AudioQCReport,
@@ -16,11 +15,13 @@ from flow_story_studio.models import (
     VisualQCReport,
 )
 from flow_story_studio.providers.base import RenderResult
+from flow_story_studio.providers.registry import ProviderRegistry
 from flow_story_studio.qc_repair import (
     MAX_AUTO_RENDER_ATTEMPTS,
     build_repair_instruction,
     can_auto_retry,
     classify_qc_failures,
+    effective_render_prompt,
 )
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.scene_contracts import seal_scene_contract
@@ -40,7 +41,7 @@ def _single_scene():
         AnalyzeRequest(
             name="qc repair",
             original_text=SCRIPT,
-            settings=VideoSettings(provider="google-flow"),
+            settings=VideoSettings(provider="test-renderer", video_model="test-model"),
         )
     )
     assert project.scenes
@@ -81,8 +82,8 @@ def _mark_visual_failure(scene, code: str = "ACTION_CONSISTENCY_BELOW_THRESHOLD"
 
 def _mark_passed(scene) -> None:
     scene.quality = QualityReport()
-    scene.render_provider = "google-flow"
-    scene.render_model = "veo-3.1-lite-lower-priority"
+    scene.render_provider = "test-renderer"
+    scene.render_model = "test-model"
     scene.visual_qc = VisualQCReport(
         status="Passed",
         score=100,
@@ -120,7 +121,7 @@ def _mark_passed(scene) -> None:
 
 def test_qc_repair_classifies_and_preserves_contract_prompt() -> None:
     project, scene = _single_scene()
-    original_prompt = _prompt(scene)
+    original_prompt = effective_render_prompt(scene)
     original_source = scene.source_text
     original_contract = scene.render_contract_hash
 
@@ -129,7 +130,7 @@ def test_qc_repair_classifies_and_preserves_contract_prompt() -> None:
     categories = classify_qc_failures(scene)
     instruction = build_repair_instruction(scene)
     scene.runtime_repair_instruction = instruction
-    repaired_prompt = _prompt(scene)
+    repaired_prompt = effective_render_prompt(scene)
 
     assert "ACTION_ERROR" in categories
     assert instruction.startswith("TARGETED REPAIR PASS")
@@ -172,6 +173,7 @@ async def test_queue_retries_at_most_three_times_and_keeps_contract(
     storage = ProjectStorage(tmp_path / "projects")
     project, scene = _single_scene()
     project.scenes = [scene]
+    scene.image_plan.status = "Ready"
     original_source = scene.source_text
     original_action = scene.action
     original_dialogues = deepcopy(scene.dialogues)
@@ -181,10 +183,10 @@ async def test_queue_retries_at_most_three_times_and_keeps_contract(
 
     calls: list[tuple[int, str, str]] = []
 
-    class FakeFlow:
+    class FakeRenderer:
         configured = True
 
-        async def generate(self, _project, current, checkpoint=None):
+        async def generate(self, _project, current):
             calls.append(
                 (
                     current.render_attempt,
@@ -196,10 +198,11 @@ async def test_queue_retries_at_most_three_times_and_keeps_contract(
                 job_id=f"job-{len(calls)}",
                 result_url="/video",
                 result_file=f"renders/{project.id}/{current.id}/attempt-{len(calls)}.mp4",
-                upstream_project_id="upstream-project",
             )
 
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    registry = ProviderRegistry()
+    registry.register("test-renderer", FakeRenderer())
+    queue = RenderQueue(storage, provider_registry=registry)
 
     async def reject_every_attempt(_project, current):
         current.quality = QualityReport()
@@ -239,7 +242,7 @@ async def test_direct_scene_waits_for_predecessor_repair_then_runs(tmp_path: Pat
         AnalyzeRequest(
             name="dependency repair",
             original_text=SCRIPT,
-            settings=VideoSettings(provider="google-flow"),
+            settings=VideoSettings(provider="test-renderer", video_model="test-model"),
         )
     )
     assert len(project.scenes) >= 2
@@ -248,6 +251,8 @@ async def test_direct_scene_waits_for_predecessor_repair_then_runs(tmp_path: Pat
     current.characters = list(previous.characters)
     current.start_state = deepcopy(previous.end_state)
     current.visual_plan.dependency_mode = "direct"
+    previous.image_plan.status = "Ready"
+    current.image_plan.status = "Ready"
     seal_scene_contract(current)
     project.scenes = [previous, current]
     storage.save(project)
@@ -255,19 +260,20 @@ async def test_direct_scene_waits_for_predecessor_repair_then_runs(tmp_path: Pat
     calls: list[str] = []
     previous_attempts = 0
 
-    class FakeFlow:
+    class FakeRenderer:
         configured = True
 
-        async def generate(self, _project, scene, checkpoint=None):
+        async def generate(self, _project, scene):
             calls.append(scene.id)
             return RenderResult(
                 job_id=f"job-{len(calls)}",
                 result_url="/video",
                 result_file=f"renders/{project.id}/{scene.id}/attempt-{len(calls)}.mp4",
-                upstream_project_id="upstream-project",
             )
 
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    registry = ProviderRegistry()
+    registry.register("test-renderer", FakeRenderer())
+    queue = RenderQueue(storage, provider_registry=registry)
 
     async def controlled_qc(_project, scene):
         nonlocal previous_attempts
@@ -296,7 +302,7 @@ async def test_direct_scene_waits_for_predecessor_repair_then_runs(tmp_path: Pat
     assert second.start_state == first.accepted_end_state
 
 
-def test_qc_repair_never_spends_flow_retry_on_local_audio_drift() -> None:
+def test_qc_repair_never_spends_provider_retry_on_local_audio_drift() -> None:
     _project, scene = _single_scene()
     scene.visual_qc = VisualQCReport(status="Passed", score=100)
     scene.audio_qc = AudioQCReport(

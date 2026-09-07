@@ -157,8 +157,13 @@ once
 in props even when the screenplay has no PROP section. Never classify headings, voice labels, camera
 notes or production metadata as characters. Give every character immutable face, body, hair, eyes,
 skin, wardrobe, accessories, shoes and identifying features. Give every location immutable
-architecture, layout, materials, objects, palette and spatial anchors. Keep chronology and source
-facts exact. Output JSON only."""
+architecture, layout, materials, fixed objects and spatial anchors. LOCATION IDENTITY RULE:
+weather, precipitation, time-of-day, darkness/brightness, temporary lighting intensity/color/spill,
+people, handheld/action props, temporary clutter and readable screen/sign content are scene-state,
+not immutable location identity, even when multiple scenes happen to share them. A fixed window,
+door, lamp, CCTV monitor wall or counter may be canonical as physical structure, but rain outside,
+lamp/LED on-off/intensity/color state and display content are not. Keep chronology and source facts
+exact. Output JSON only."""
 
 
 def _physical_state_payload(state: Any) -> dict[str, Any]:
@@ -256,9 +261,16 @@ continuity. Within a direct continuation, chain start_state from the preceding e
 ANTI-DUPLICATION RULE: every supplied scene ID must express its own source beat. Do not copy or
 paraphrase another scene's action, camera setup, staging or summary. Treat current_location_id
 as the intended on-screen location; a place merely mentioned in dialogue must not replace it.
-Preserve
-recurring identity and world attributes, but vary composition, blocking and camera motivation when
-the source beat changes.
+
+SCENE OWNERSHIP RULE: each physical action, reveal, reaction, dialogue line and state transition
+belongs only to the scene whose source_text contains it. PREVIOUS APPROVED END STATE is physical
+continuity only; it is never permission to replay a completed action or restate the previous scene's
+narrative content. If the current source beat is only a reaction or consequence, describe only that
+new reaction/consequence. Across the returned batch, do not assign the same authored event to two
+different scene IDs.
+
+Preserve recurring identity and world attributes, but vary composition, blocking and camera
+motivation when the source beat changes.
 Identity, wardrobe, props, architecture, screen direction, palette, weather and lighting may change
 only when source_text or an explicit scene context supports the change. Describe filmable
 action only.
@@ -303,8 +315,11 @@ visual_style and scenes. Keep the supplied IDs. You may add missed characters/lo
 the next sequential ID. Do not create scenes from headings, metadata, character profiles, voice
 labels or camera notes. A character must be a real on-screen person; never return "ft", "Giọng",
 "Voice", a section title or a technical role as a character. Fill a specific immutable visual
-identity for each character and fixed architecture/spatial anchors for each location. For every
-scene return: id, summary, characters (IDs), location_id, action,
+identity for each character and fixed architecture/spatial anchors for each location. Never place
+scene-specific weather, time-of-day, temporary lighting state, people, action props, transient
+clutter or readable display content into immutable location architecture/layout/objects/anchors.
+Those belong only to scene fields/state. For every scene return: id, summary, characters (IDs),
+location_id, action,
 camera, lighting, atmosphere, voiceover, dialogues, start_state and end_state. Each dialogue has
 character_id, text and emotion. Each state has character_positions, character_wardrobe,
 prop_positions, time, weather, camera and notes. Keep source meaning exact and make each start_state

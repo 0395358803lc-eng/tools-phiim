@@ -20,8 +20,10 @@ from . import __version__
 from .analysis_jobs import AnalysisJobRegistry
 from .analysis_providers.xkiro import XKiroClient
 from .analysis_routes import build_analysis_router
+from .browser_session_routes import build_browser_session_router
+from .browser_sessions import GoogleFlowSessionManager
 from .export_routes import build_export_router
-from .flow_integration import FlowCLIIntegration
+from .google_flow_browser_worker import GoogleFlowBrowserWorker
 from .integration_routes import build_integration_router
 from .logging_config import get_logger
 from .models import (
@@ -29,7 +31,9 @@ from .models import (
     Project,
 )
 from .project_routes import build_project_router
-from .providers.mock import MockProvider
+from .providers.google_flow_browser import GoogleFlowBrowserProvider
+from .providers.reference import ReferenceProvider
+from .providers.registry import ProviderRegistry, build_default_registry
 from .render_queue import RenderQueue
 from .service import StudioService
 from .storage import ProjectStorage
@@ -46,7 +50,9 @@ LOGGER = get_logger("api")
 def create_app(
     storage: ProjectStorage | None = None,
     xkiro_client: XKiroClient | None = None,
-    flow_integration: FlowCLIIntegration | None = None,
+    provider_registry: ProviderRegistry | None = None,
+    reference_provider: ReferenceProvider | None = None,
+    browser_session_manager: GoogleFlowSessionManager | None = None,
     credential_root: Path | None = None,
     session_token: str | None = None,
 ) -> FastAPI:
@@ -54,14 +60,25 @@ def create_app(
     runtime_data_root = project_storage.root.parent
     service = StudioService(project_storage)
     credential_dir = (credential_root or runtime_data_root / "secrets").resolve()
-    flow = flow_integration or FlowCLIIntegration(runtime_data_root, credential_root=credential_dir)
+    browser_sessions = browser_session_manager or GoogleFlowSessionManager(
+        runtime_data_root / "browser-sessions" / "google-flow"
+    )
+    providers = provider_registry or build_default_registry()
+    google_flow_provider: GoogleFlowBrowserProvider | None = None
+    if provider_registry is None:
+        google_flow_provider = GoogleFlowBrowserProvider(
+            GoogleFlowBrowserWorker(browser_sessions, runtime_data_root)
+        )
+        providers.register(GoogleFlowBrowserProvider.name, google_flow_provider)
     xkiro = xkiro_client or XKiroClient(credential_path=credential_dir / "xkiro-api-key.bin")
     xkiro.set_checkpoint_root(runtime_data_root / "analysis-checkpoints")
+    effective_reference_provider = reference_provider or google_flow_provider
     queue = RenderQueue(
         project_storage,
-        flow,
         xkiro=xkiro,
         data_root=runtime_data_root,
+        provider_registry=providers,
+        reference_provider=effective_reference_provider,
     )
     merger = VideoMerger(runtime_data_root)
     analysis_registry = AnalysisJobRegistry()
@@ -88,7 +105,7 @@ def create_app(
     app = FastAPI(
         title="TH Media",
         version=__version__,
-        description="Continuity-first storyboard and Google Flow render pipeline",
+        description="Continuity-first storyboard with provider-neutral render pipeline",
         lifespan=lifespan,
     )
     app.state.storage = project_storage
@@ -96,7 +113,10 @@ def create_app(
     app.state.queue = queue
     app.state.merger = merger
     app.state.xkiro = xkiro
-    app.state.flow = flow
+    app.state.providers = providers
+    app.state.google_flow_provider = google_flow_provider
+    app.state.reference_provider = effective_reference_provider
+    app.state.browser_sessions = browser_sessions
     app.state.analysis_jobs = analysis_jobs
     app.state.session_auth_required = bool(session_token)
 
@@ -136,21 +156,16 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, object]:
-        mock = await MockProvider().health()
-        flow_status = await flow.status(verify=False)
+        configured = providers.configured_names()
+        production = [name for name in configured if name != "mock"]
         return {
             "ok": True,
             "version": __version__,
-            "providers": [
-                mock,
-                {
-                    "ok": flow_status.configured and flow_status.flow_cli_available,
-                    "provider": "google-flow",
-                    "message": flow_status.message,
-                    "browser_ready": flow_status.browser_ready,
-                },
-            ],
             "analysis": {"offline": True, "xkiro_configured": xkiro.configured},
+            "render": {
+                "provider": production[0] if production else "unconfigured",
+                "configured": bool(production),
+            },
         }
 
     @app.get("/api/session")
@@ -162,7 +177,8 @@ def create_app(
             "session_auth_required": bool(session_token),
         }
 
-    app.include_router(build_integration_router(flow, xkiro))
+    app.include_router(build_integration_router(xkiro, providers))
+    app.include_router(build_browser_session_router(browser_sessions))
 
     app.include_router(build_analysis_router(service, xkiro, queue, analysis_registry))
 
@@ -171,7 +187,6 @@ def create_app(
             storage=project_storage,
             service=service,
             xkiro=xkiro,
-            flow=flow,
             queue=queue,
             runtime_data_root=runtime_data_root,
             required=required,
@@ -181,7 +196,6 @@ def create_app(
     app.include_router(
         build_video_router(
             storage=project_storage,
-            flow=flow,
             queue=queue,
             merger=merger,
             runtime_data_root=runtime_data_root,

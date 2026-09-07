@@ -173,17 +173,26 @@ class XKiroClient:
         vision = [item for item in models if bool(item.capabilities.get("vision"))]
         if not vision:
             raise XKiroError("No xKiro vision-capable model is available")
-        preferred = os.getenv("XKIRO_VISION_MODEL", "").strip() or model_id.strip()
-        priority = [
-            preferred,
-            "minimax/minimax-m3:free",
-        ]
-        ordered: list[XKiroModel] = []
         by_id = {item.id: item for item in vision}
-        for candidate in priority:
-            if candidate and candidate in by_id and by_id[candidate] not in ordered:
-                ordered.append(by_id[candidate])
-        ordered.extend(item for item in vision if item not in ordered)
+        selected = model_id.strip()
+        if selected:
+            model = by_id.get(selected)
+            if model is None:
+                raise XKiroError(
+                    "Selected xKiro Vision model is unavailable or no longer vision-capable"
+                )
+            ordered = [model]
+        else:
+            preferred = os.getenv("XKIRO_VISION_MODEL", "").strip()
+            priority = [
+                preferred,
+                "minimax/minimax-m3:free",
+            ]
+            ordered: list[XKiroModel] = []
+            for candidate in priority:
+                if candidate and candidate in by_id and by_id[candidate] not in ordered:
+                    ordered.append(by_id[candidate])
+            ordered.extend(item for item in vision if item not in ordered)
 
         image_parts: list[dict[str, object]] = []
         for path in images[:8]:
@@ -205,31 +214,51 @@ class XKiroClient:
             raise XKiroError("Vision QC has no readable input images")
         content: list[dict[str, object]] = image_parts + [{"type": "text", "text": prompt}]
         timeout = self._env_int("XKIRO_VISION_TIMEOUT", 180, 30, 900)
+        attempts_per_model = self._env_int("XKIRO_VISION_RETRIES", 3, 1, 5)
         errors: list[str] = []
         for model in ordered[:6]:
-            try:
-                async with self._client(
-                    timeout=httpx.Timeout(timeout, connect=min(30, timeout))
-                ) as client:
-                    response = await client.post(
-                        "/v1/chat/completions",
-                        json={
-                            "model": model.id,
-                            "messages": [{"role": "user", "content": content}],
-                            "temperature": 0,
-                            "max_tokens": 1200,
-                            "response_format": {"type": "json_object"},
-                        },
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                    )
-                if response.is_error:
-                    errors.append(f"{model.id}: {self._safe_error(response)}")
-                    continue
-                payload = response.json()
-                answer = message_content(payload["choices"][0]["message"])
-                return parse_json_object(answer), model.id
-            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-                errors.append(f"{model.id}: {type(exc).__name__}")
+            final_error = ""
+            for attempt in range(attempts_per_model):
+                try:
+                    async with self._client(
+                        timeout=httpx.Timeout(timeout, connect=min(30, timeout))
+                    ) as client:
+                        response = await client.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": model.id,
+                                "messages": [{"role": "user", "content": content}],
+                                "temperature": 0,
+                                "max_tokens": 1200,
+                                "response_format": {"type": "json_object"},
+                            },
+                            headers={"Authorization": f"Bearer {self._api_key}"},
+                        )
+                    if response.is_error:
+                        final_error = self._safe_error(response)
+                        transient = response.status_code in TRANSIENT_HTTP_STATUS
+                        if transient and attempt + 1 < attempts_per_model:
+                            delay = retry_delay(
+                                min(8, 2**attempt),
+                                retry_after=response.headers.get("Retry-After"),
+                                maximum=10,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        break
+                    payload = response.json()
+                    answer = message_content(payload["choices"][0]["message"])
+                    return parse_json_object(answer), model.id
+                except httpx.HTTPError as exc:
+                    final_error = type(exc).__name__
+                    if attempt + 1 < attempts_per_model:
+                        await asyncio.sleep(min(8, 2**attempt))
+                        continue
+                    break
+                except (ValueError, KeyError, IndexError, TypeError) as exc:
+                    final_error = type(exc).__name__
+                    break
+            errors.append(f"{model.id}: {final_error or 'unknown error'}")
         raise XKiroError("Vision QC failed across available models: " + "; ".join(errors[-3:]))
 
     async def connect(self, api_key: str) -> XKiroConnection:
@@ -304,6 +333,17 @@ class XKiroClient:
             raise XKiroError("Model đã chọn không còn tồn tại trong catalog xKiro")
 
         model_info = available[model]
+        vision_model = request.settings.vision_model.strip()
+        if vision_model:
+            vision_info = available.get(vision_model)
+            if vision_info is None:
+                raise XKiroError("Model Vision đã chọn không còn tồn tại trong catalog xKiro")
+            if not bool(vision_info.capabilities.get("vision")):
+                raise XKiroError("Model Vision đã chọn không hỗ trợ phân tích hình ảnh")
+            emit(
+                f"Vision QC sẽ dùng {vision_info.display_name} "
+                f"({vision_info.access_tier})"
+            )
         emit(f"Đã chọn {model_info.display_name} ({model_info.access_tier})")
         draft = analyze_story(request)
         emit(
@@ -328,7 +368,7 @@ class XKiroClient:
                 checkpoint,
                 emit,
             )
-            emit("JSON hợp lệ; đang hợp nhất continuity và tạo Flow prompt")
+            emit("JSON hợp lệ; đang hợp nhất continuity và tạo render prompt")
         except XKiroError:
             emit("Đã giữ checkpoint; lần chạy sau sẽ tiếp tục từ phần hoàn tất gần nhất", "warning")
             raise

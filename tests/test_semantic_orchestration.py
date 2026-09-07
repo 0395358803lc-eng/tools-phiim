@@ -108,4 +108,4 @@ Maya sits alone at a desk. Alex is not in the office.
     assert office_scene.characters == [maya.id]
     assert alex.id not in office_scene.start_state.character_positions
     assert len({scene.camera for scene in project.scenes}) >= 2
-    assert len({scene.flow_prompt for scene in project.scenes}) == len(project.scenes)
+    assert len({scene.render_prompt for scene in project.scenes}) == len(project.scenes)

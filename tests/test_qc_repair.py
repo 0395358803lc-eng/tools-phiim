@@ -11,6 +11,7 @@ from flow_story_studio.models import (
     VisualQCReport,
 )
 from flow_story_studio.providers.base import RenderResult
+from flow_story_studio.providers.registry import ProviderRegistry
 from flow_story_studio.qc_repair import (
     MAX_AUTO_RENDER_ATTEMPTS,
     build_repair_instruction,
@@ -51,7 +52,7 @@ def test_qc_failure_classification_and_budget() -> None:
     assert "IDENTITY_DRIFT" in categories
     assert "PROP_STATE_ERROR" in categories
     assert "AUDIO_ERROR" in categories
-    # Local loudness drift is repairable without spending another Flow generation.
+    # Local loudness drift is repairable without spending another provider generation.
     assert can_auto_retry(scene) is False
 
     instruction = build_repair_instruction(scene)
@@ -79,29 +80,30 @@ def test_infrastructure_failure_is_not_auto_retried() -> None:
 async def test_queue_auto_repairs_once_then_accepts(tmp_path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
     project = analyze_story(AnalyzeRequest(name="repair queue", original_text=SCRIPT))
-    project.settings.provider = "google-flow"
+    project.settings.provider = "test-renderer"
     scene = project.scenes[0]
+    scene.image_plan.status = "Ready"
     storage.save(project)
     calls: list[str] = []
 
-    class FakeFlow:
+    class FakeRenderer:
         configured = True
 
-        async def generate(self, current_project, current_scene, checkpoint=None):
+        async def generate(self, current_project, current_scene):
             calls.append(current_scene.runtime_repair_instruction)
             relative = (
                 f"renders/{current_project.id}/{current_scene.id}/attempt-"
                 f"{current_scene.render_attempt}.mp4"
             )
-            if checkpoint:
-                checkpoint(current_project, current_scene)
             return RenderResult(
                 job_id=f"job-{current_scene.render_attempt}",
                 result_url="/video",
                 result_file=relative,
             )
 
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    registry = ProviderRegistry()
+    registry.register("test-renderer", FakeRenderer())
+    queue = RenderQueue(storage, provider_registry=registry)
 
     async def fake_post_render_qc(current_project, current_scene):
         current_scene.quality = QualityReport()

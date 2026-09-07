@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
 from platformdirs import user_data_dir
@@ -55,7 +55,7 @@ button.disabled=false;button.textContent='Chọn thư mục trên máy tính →
 
 def _migrate_legacy_credentials(new_root: Path, legacy_root: Path) -> None:
     """Copy only missing encrypted credential files into the current app vault."""
-    filenames = ("xkiro-api-key.bin", "google-flow.cookies.bin")
+    filenames = ("xkiro-api-key.bin",)
     try:
         new_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -171,7 +171,17 @@ class DesktopSession:
             self._thread.start()
             _wait_until_ready(self._url)
             LOGGER.info("Desktop backend ready for workspace %s", workspace)
-            return f"{self._url}/#session={self._session_token}"
+            startup_project = os.getenv("FLOW_STUDIO_OPEN_PROJECT_ID", "").strip()
+            startup_view = os.getenv("FLOW_STUDIO_START_VIEW", "storyboard").strip()
+            query = ""
+            if startup_project:
+                query = "?" + urlencode(
+                    {
+                        "project": startup_project,
+                        "view": startup_view,
+                    }
+                )
+            return f"{self._url}/{query}#session={self._session_token}"
 
     def choose_workspace(self) -> dict[str, object]:
         if self._window is None:

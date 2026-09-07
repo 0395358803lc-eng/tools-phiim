@@ -39,7 +39,13 @@ def prepare_project_orchestration(project: Project) -> Project:
             "required_dialogue": list(intent.required_dialogue),
             "required_actions": list(intent.required_actions),
             "state_delta": derive_scene_state_delta(scene),
-            "audio_locks": scene_audio_locks(project, scene, film_model.audio_bible),
+            "audio_locks": scene_audio_locks(
+                project,
+                scene,
+                film_model.audio_bible,
+                dependency_mode=mode.value,
+                previous_scene=previous,
+            ),
             "authority_order": [
                 "source",
                 "canonical",

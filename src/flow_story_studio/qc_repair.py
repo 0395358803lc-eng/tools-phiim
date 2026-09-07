@@ -6,6 +6,15 @@ from .models import Scene
 MAX_AUTO_RENDER_ATTEMPTS = 3
 
 
+def effective_render_prompt(scene: Scene) -> str:
+    """Return the canonical render prompt plus any bounded runtime repair instruction."""
+    base = scene.render_prompt.strip()
+    repair = scene.runtime_repair_instruction.strip()
+    if not repair:
+        return base
+    return base + "\n\nRUNTIME QC REPAIR INSTRUCTION:\n" + repair
+
+
 def _issue_codes(scene: Scene) -> list[str]:
     codes: list[str] = []
     for report in (scene.visual_qc, scene.audio_qc, scene.continuity_qc):

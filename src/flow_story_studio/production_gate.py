@@ -5,9 +5,139 @@ All downstream consumers must use this module instead of trusting mutable status
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .film.state_delta import continuity_state_hash
-from .models import Project, Scene
+from .models import Project, Scene, VisualReference
 from .scene_contracts import verify_scene_contract
+
+MASTER_BLOCKING_CODES: dict[str, set[str]] = {
+    "character": {
+        "identity_mismatch",
+        "identity_not_established",
+        "appearance_mismatch",
+        "age_mismatch",
+        "hair_mismatch",
+        "wardrobe_mismatch",
+        "wardrobe_state",
+        "scene_specific_background",
+        "background_contamination",
+        "scene_specific_lighting",
+        "lighting_mood",
+        "action_pose",
+        "transient_story_state",
+        "readable_text",
+        "logo_or_brand",
+    },
+    "location": {
+        "layout_mismatch",
+        "missing_spatial_anchor",
+        "ambiguous_spatial_anchors",
+        "scene_specific_weather",
+        "scene_specific_lighting",
+        "transient_story_prop",
+        "people_present",
+        "readable_text",
+        "logo_or_brand",
+    },
+    "prop": {
+        "identity_mismatch",
+        "shape_mismatch",
+        "material_mismatch",
+        "color_mismatch",
+        "state_mismatch",
+        "background_contamination",
+        "readable_text",
+        "logo_or_brand",
+    },
+}
+
+
+def master_reference_threshold(project: Project, reference: VisualReference) -> int:
+    """Return the strict per-type floor for a Project Master.
+
+    Character identity is reused across the most shots and therefore requires a
+    stronger floor than ordinary scene QC. Location/prop Masters keep at least
+    the project quality floor and never fall below 85.
+    """
+    base = int(project.settings.quality_threshold)
+    if reference.entity_type == "character":
+        return max(base, 90)
+    return max(base, 85)
+
+
+def is_master_blocking_issue(reference: VisualReference, code: str) -> bool:
+    normalized = str(code or "").strip().casefold()
+    return normalized in MASTER_BLOCKING_CODES.get(reference.entity_type, set())
+
+
+def master_reference_qc_blockers(
+    project: Project,
+    reference: VisualReference,
+) -> list[str]:
+    """Return QC-only blockers for a candidate Master before approval."""
+    threshold = master_reference_threshold(project, reference)
+    reasons: list[str] = []
+    if reference.vision_score < threshold:
+        reasons.append(
+            f"{reference.id} score {reference.vision_score} is below {threshold}"
+        )
+    if project.settings.vision_model and reference.vision_model != project.settings.vision_model:
+        reasons.append(
+            f"{reference.id} Vision model evidence is stale: "
+            f"{reference.vision_model or '<missing>'}!={project.settings.vision_model}"
+        )
+    for issue in reference.vision_issues:
+        if issue.severity == "error" or is_master_blocking_issue(reference, issue.code):
+            reasons.append(f"{reference.id} {issue.code}: {issue.message}")
+    return reasons
+
+
+def master_reference_blockers(
+    project: Project,
+    reference: VisualReference,
+    *,
+    data_root: Path | None = None,
+) -> list[str]:
+    """Return every reason one Master is unsafe for downstream scene generation."""
+    reasons = master_reference_qc_blockers(project, reference)
+    if reference.status != "approved":
+        reasons.append(f"{reference.id} status is {reference.status}")
+    if not reference.approved_reference:
+        reasons.append(f"{reference.id} approved image path is missing")
+    elif data_root is not None:
+        candidate = (data_root / reference.approved_reference).resolve()
+        try:
+            candidate.relative_to(data_root.resolve())
+        except ValueError:
+            reasons.append(f"{reference.id} approved image path escapes data root")
+        else:
+            if not candidate.is_file():
+                reasons.append(f"{reference.id} approved image file is missing")
+    return reasons
+
+
+def project_master_blockers(
+    project: Project,
+    *,
+    data_root: Path | None = None,
+) -> list[str]:
+    """Return all project-level Master Gate failures.
+
+    Scene image/video production must not start while this list is non-empty.
+    """
+    reasons: list[str] = []
+    for reference in project.visual_bible.references:
+        reasons.extend(master_reference_blockers(project, reference, data_root=data_root))
+    return reasons
+
+
+def is_project_master_ready(
+    project: Project,
+    *,
+    data_root: Path | None = None,
+) -> bool:
+    return not project_master_blockers(project, data_root=data_root)
 
 
 def _below_threshold(values: dict[str, int], threshold: int) -> list[str]:
@@ -119,7 +249,7 @@ def scene_production_blockers(
     if visual_low:
         reasons.append("visual component below threshold: " + ", ".join(visual_low))
 
-    if project.settings.provider == "google-flow":
+    if project.settings.provider != "mock":
         if scene.audio_qc.status != "Passed":
             reasons.append(f"audio QC is {scene.audio_qc.status}")
         if not scene.audio_qc.audio_present:
@@ -144,6 +274,15 @@ def scene_production_blockers(
             reasons.append("visual QC five-frame evidence is incomplete")
         if not scene.visual_qc.model_id:
             reasons.append("visual QC model evidence is missing")
+        if (
+            project.settings.vision_model
+            and scene.visual_qc.model_id != project.settings.vision_model
+        ):
+            reasons.append(
+                "visual QC model does not match selected project Vision model: "
+                f"{scene.visual_qc.model_id or '<missing>'}!="
+                f"{project.settings.vision_model}"
+            )
 
     continuity = scene.continuity_qc
     if scene.visual_plan.dependency_mode == "direct":
@@ -162,8 +301,18 @@ def scene_production_blockers(
             reasons.append(
                 "continuity component below threshold: " + ", ".join(continuity_low)
             )
-        if project.settings.provider == "google-flow" and not continuity.model_id:
+        if project.settings.provider != "mock" and not continuity.model_id:
             reasons.append("direct continuity QC model evidence is missing")
+        if (
+            project.settings.provider != "mock"
+            and project.settings.vision_model
+            and continuity.model_id != project.settings.vision_model
+        ):
+            reasons.append(
+                "direct continuity QC model does not match selected project Vision model: "
+                f"{continuity.model_id or '<missing>'}!="
+                f"{project.settings.vision_model}"
+            )
     elif continuity.status not in {"NotApplicable", "Passed"}:
         reasons.append(f"non-direct continuity QC is {continuity.status}")
 

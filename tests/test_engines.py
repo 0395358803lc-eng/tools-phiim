@@ -25,8 +25,8 @@ def test_analysis_builds_complete_continuity_project() -> None:
     assert project.characters
     assert project.locations
     assert any(item.name == "Điện thoại" for item in project.props)
-    assert project.scenes[0].flow_prompt.startswith("SCENE ID: SCENE_001")
-    assert "Avoid:" in project.scenes[0].flow_prompt
+    assert project.scenes[0].render_prompt.startswith("SCENE ID: SCENE_001")
+    assert "Avoid:" in project.scenes[0].render_prompt
     assert project.scenes[1].start_state == project.scenes[0].end_state
     assert project.continuity_score == 100
     assert all(scene.ai_locked for scene in project.scenes)

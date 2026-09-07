@@ -33,12 +33,7 @@ data/debug/
 acceptance/live-results/
 acceptance/live-workspace/
 
-# Google Flow / browser authentication runtime
-scripts/_flow_cli_cookies.json
 scripts/*cookies*.json
-
-# Flow staging runtime
-data/.gflow-staging/
 
 # Debug logs
 *.log
@@ -56,3 +51,9 @@ installer/prereqs/*.exe
 # Local secrets
 .env
 .env.local
+
+# Temporary local artifacts
+*.exit
+*.bak*
+.coverage
+coverage.xml

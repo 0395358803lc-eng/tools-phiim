@@ -11,8 +11,9 @@ import re
 import unicodedata
 
 from ..engines.continuity import check_project, is_direct_continuation
-from ..engines.prompt_generator import make_flow_prompt, make_visual_prompt
+from ..engines.prompt_generator import make_render_prompt, make_visual_prompt
 from ..film import orchestrator as film_orchestrator
+from ..film.beat_integrity import restore_ai_duplicate_beats
 from ..film.validation import assert_project_hard_constraints
 from ..models import Character, ContinuityState, Location, Project, Prop
 from ..scene_contracts import seal_project_contracts
@@ -403,6 +404,11 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
         previous_scene = scene
 
     project = _normalize_source_timeline(project)
+    # AI enrichment is not allowed to turn two distinct source beats into near-duplicate
+    # production scenes. Restore any copied beat from the deterministic source draft before
+    # contracts/prompts are compiled; the hard validator below remains fail-closed.
+    project = restore_ai_duplicate_beats(project, source_project)
+
     # Audio finalization can remove AI-authored voiceover and semantic normalization can
     # resolve camera/cast conflicts. Recompute current continuity without mutating the
     # already source-grounded state so stale pre-finalization warnings do not survive.
@@ -426,7 +432,7 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             start_state=scene.start_state,
             end_state=scene.end_state,
         )
-        scene.flow_prompt = make_flow_prompt(
+        scene.render_prompt = make_render_prompt(
             scene,
             characters=visible_characters,
             location=location,

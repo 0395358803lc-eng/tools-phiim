@@ -1,3 +1,5 @@
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -32,7 +34,7 @@ def test_storage_and_scene_edit(tmp_path: Path) -> None:
         project.scenes[0].id,
         SceneUpdate(action="Cô gái dừng lại, hít sâu rồi mới bước tiếp."),
     )
-    assert "hít sâu" in updated.scenes[0].flow_prompt
+    assert "hít sâu" in updated.scenes[0].render_prompt
     if len(updated.scenes) > 1:
         assert any("có thể ảnh hưởng" in item for item in updated.scenes[1].warnings)
 
@@ -90,3 +92,43 @@ def test_reorder_rejects_duplicate_scene_ids(tmp_path: Path) -> None:
     assert ids
     with pytest.raises(ValueError):
         service.reorder(project.id, ReorderRequest(scene_ids=ids + [ids[-1]]))
+
+
+def test_storage_recreates_projects_directory_after_external_cleanup(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    storage = ProjectStorage(root)
+    service = StudioService(storage)
+    project = service.analyze(AnalyzeRequest(name="Long job recovery", original_text=TEXT))
+
+    shutil.rmtree(root)
+    assert not root.exists()
+
+    storage.save(project)
+
+    assert root.is_dir()
+    assert storage.get(project.id) is not None
+
+
+def test_atomic_save_retries_if_directory_disappears_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "projects"
+    storage = ProjectStorage(root)
+    service = StudioService(storage)
+    project = service.analyze(AnalyzeRequest(name="Atomic retry", original_text=TEXT))
+    real_replace = os.replace
+    failed_once = False
+
+    def flaky_replace(source: str, target: str | Path) -> None:
+        nonlocal failed_once
+        if not failed_once and Path(target).parent == root:
+            failed_once = True
+            shutil.rmtree(root)
+            raise FileNotFoundError(target)
+        real_replace(source, target)
+
+    monkeypatch.setattr("flow_story_studio.storage.os.replace", flaky_replace)
+    storage.save(project)
+
+    assert failed_once
+    assert storage.get(project.id) is not None

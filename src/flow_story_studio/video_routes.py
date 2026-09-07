@@ -9,7 +9,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .flow_integration import FlowCLIIntegration
 from .logging_config import get_logger
 from .models import FinalVideo, GenerateRequest, Project, utc_now
 from .render_queue import RenderQueue
@@ -107,7 +106,6 @@ def _serve_media_file(request: Request, path: Path, media_type: str, filename: s
 def build_video_router(
     *,
     storage: ProjectStorage,
-    flow: FlowCLIIntegration,
     queue: RenderQueue,
     merger: VideoMerger,
     runtime_data_root: Path,
@@ -125,10 +123,23 @@ def build_video_router(
                 status_code=409,
                 detail="Video tổng đang được ghép; hãy chờ hoàn tất trước khi render lại scene",
             )
-        if project.settings.provider == "google-flow" and not flow.configured:
+        if not queue.is_provider_configured(project.settings.provider):
+            raise HTTPException(status_code=409, detail="Chưa cấu hình render provider.")
+        requested = request.scene_ids or [
+            scene.id for scene in project.scenes if scene.status != "Accepted"
+        ]
+        blocked = [
+            scene.id
+            for scene in project.scenes
+            if scene.id in requested and scene.image_plan.status == "Blocked"
+        ]
+        if blocked:
             raise HTTPException(
                 status_code=409,
-                detail="Hãy kết nối và xác thực Flow CLI trước khi tạo video",
+                detail=(
+                    "Không thể render: Scene Image Plan đang Blocked vì thiếu "
+                    f"Master References được duyệt: {', '.join(blocked)}"
+                ),
             )
         try:
             return await queue.enqueue(

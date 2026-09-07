@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .flow_ui_contract import DEFAULT_FLOW_VIDEO_MODEL
 from .migrations import CURRENT_PROJECT_SCHEMA_VERSION
 
 
@@ -21,7 +20,7 @@ class StrictModel(BaseModel):
 
 class VideoSettings(StrictModel):
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
-    resolution: Literal["720p", "1080p", "highest"] = "1080p"
+    resolution: Literal["360p", "720p", "1080p", "highest"] = "1080p"
     style: str = "Cinematic"
     custom_style: str = ""
     scene_duration: int = Field(default=8, ge=4, le=30)
@@ -29,10 +28,12 @@ class VideoSettings(StrictModel):
     location_lock: bool = True
     auto_continuity: bool = True
     quality_threshold: int = Field(default=85, ge=0, le=100)
-    provider: Literal["mock", "google-flow"] = "mock"
-    video_model: str = DEFAULT_FLOW_VIDEO_MODEL
+    provider: str = "unconfigured"
+    video_model: str = ""
+    image_model: str = ""
     analysis_provider: Literal["offline", "xkiro"] = "offline"
     analysis_model: str = ""
+    vision_model: str = ""
 
 
 class Character(StrictModel):
@@ -188,6 +189,9 @@ class VisualReference(StrictModel):
     status: Literal["missing", "candidate", "approved", "rejected"] = "missing"
     approved_reference: str = ""
     source_scene_id: str = ""
+    vision_score: int = Field(default=0, ge=0, le=100)
+    vision_issues: list[VisualIssue] = Field(default_factory=list)
+    vision_model: str = ""
 
 
 class VisualBible(StrictModel):
@@ -204,6 +208,33 @@ class SceneVisualPlan(StrictModel):
     lock_prompt: str = ""
 
 
+class SceneImagePlan(StrictModel):
+    status: Literal["Planned", "Ready", "Blocked", "Generated", "Approved", "Rejected"] = "Planned"
+    renderer_status: Literal["unconfigured", "configured"] = "unconfigured"
+    dependency_mode: Literal["opening", "direct", "canonical"] = "canonical"
+    anchor_scene_id: str = ""
+    start_frame_strategy: Literal[
+        "canonical_reanchor",
+        "previous_accepted_end_frame",
+    ] = "canonical_reanchor"
+    start_frame_source: str = ""
+    start_frame_requirement: str = ""
+    target_frame_strategy: str = "generate_scene_exit_keyframe"
+    character_reference_ids: list[str] = Field(default_factory=list)
+    location_reference_id: str = ""
+    prop_reference_ids: list[str] = Field(default_factory=list)
+    reference_status: dict[str, str] = Field(default_factory=dict)
+    approved_reference_images: list[str] = Field(default_factory=list)
+    identity_lock: str = ""
+    composition_lock: str = ""
+    start_frame_prompt: str = ""
+    target_frame_prompt: str = ""
+    negative_prompt: str = ""
+    plan_hash: str = ""
+    generated_start_frame: str = ""
+    generated_target_frame: str = ""
+
+
 class Scene(StrictModel):
     id: str
     order: int
@@ -218,13 +249,14 @@ class Scene(StrictModel):
     atmosphere: str
     duration: int = Field(ge=4, le=30)
     visual_prompt: str
-    flow_prompt: str
+    render_prompt: str
     voiceover: str = ""
     dialogues: list[Dialogue] = Field(default_factory=list)
     start_state: ContinuityState
     end_state: ContinuityState
     reference_image: str = ""
     visual_plan: SceneVisualPlan = Field(default_factory=SceneVisualPlan)
+    image_plan: SceneImagePlan = Field(default_factory=SceneImagePlan)
     status: Literal[
         "Waiting",
         "Preparing",
@@ -298,7 +330,7 @@ class Project(StrictModel):
     scenes: list[Scene] = Field(default_factory=list)
     continuity_score: int = 100
     continuity_warnings: list[str] = Field(default_factory=list)
-    flow_project_id: str = ""
+    provider_project_id: str = ""
     film_model: dict[str, object] = Field(default_factory=dict)
     film_model_hash: str = ""
     final_video: FinalVideo = Field(default_factory=FinalVideo)
@@ -323,7 +355,7 @@ class SceneUpdate(StrictModel):
     atmosphere: str | None = None
     duration: int | None = Field(default=None, ge=4, le=30)
     visual_prompt: str | None = None
-    flow_prompt: str | None = None
+    render_prompt: str | None = None
     voiceover: str | None = None
     dialogues: list[Dialogue] | None = None
     start_state: ContinuityState | None = None
@@ -342,8 +374,17 @@ class GenerateRequest(StrictModel):
 
 
 class VideoProviderUpdate(StrictModel):
-    provider: Literal["mock", "google-flow"]
-    video_model: str = Field(min_length=1, max_length=200)
+    provider: str = "unconfigured"
+    video_model: str = Field(default="", max_length=200)
+    resolution: Literal["360p", "720p", "1080p", "highest"] | None = None
+
+
+class VisionSettingsUpdate(StrictModel):
+    vision_model: str = Field(min_length=1, max_length=200)
+
+
+class ImageSettingsUpdate(StrictModel):
+    image_model: str = Field(min_length=1, max_length=200)
 
 
 class ReorderRequest(StrictModel):
@@ -374,33 +415,3 @@ class XKiroConnection(StrictModel):
     models: list[XKiroModel] = Field(default_factory=list)
 
 
-class FlowCookieConnectRequest(StrictModel):
-    cookie: str = Field(min_length=8, max_length=200_000)
-
-
-class FlowVideoModel(StrictModel):
-    id: str
-    display_name: str
-    note: str = ""
-
-
-class FlowConnection(StrictModel):
-    configured: bool
-    authenticated: bool = False
-    transport: Literal[
-        "none",
-        "flow-cli",
-        "flow-cli+chrome-cdp",
-        "gflow",
-        "gflow+chrome-cdp",
-    ] = "none"
-    cookie_count: int = 0
-    message: str = ""
-    flow_cli_available: bool = False
-    gflow_available: bool = False
-    browser_ready: bool = False
-    cdp_ready: bool = False
-    interactive_login_required: bool = False
-    credits_remaining: int | None = None
-    tier: str = ""
-    models: list[FlowVideoModel] = Field(default_factory=list)

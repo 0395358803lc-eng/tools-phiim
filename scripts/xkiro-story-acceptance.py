@@ -161,7 +161,7 @@ def output_text(scenes: list[typing.Any]) -> str:
                 scene.lighting,
                 scene.atmosphere,
                 scene.visual_prompt,
-                scene.flow_prompt,
+                scene.render_prompt,
                 scene.start_state.time,
                 scene.start_state.weather,
                 scene.start_state.notes,
@@ -435,18 +435,18 @@ def audit_project(
                         )
 
             dependency_mode = scene.visual_plan.dependency_mode
-            has_direct_claim = "Direct continuation of" in scene.flow_prompt
-            has_canonical_claim = "Canonical cut/new beat" in scene.flow_prompt
+            has_direct_claim = "Direct continuation of" in scene.render_prompt
+            has_canonical_claim = "Canonical cut/new beat" in scene.render_prompt
             if dependency_mode == "direct" and not has_direct_claim:
                 error(
                     "FLOW_DEPENDENCY_PROMPT",
-                    f"{scene.id} is direct but Flow prompt lacks direct-continuation lock",
+                    f"{scene.id} is direct but render prompt lacks direct-continuation lock",
                     number,
                 )
             if dependency_mode != "direct" and has_direct_claim:
                 error(
                     "FLOW_DEPENDENCY_PROMPT",
-                    f"{scene.id} is {dependency_mode} but Flow prompt claims direct continuation",
+                    f"{scene.id} is {dependency_mode} but render prompt claims direct continuation",
                     number,
                 )
             if dependency_mode == "canonical" and not has_canonical_claim:
@@ -645,16 +645,20 @@ def audit_project(
                 int(number),
             )
 
-    prompts = [scene.flow_prompt.strip() for scene in project.scenes if scene.flow_prompt.strip()]
+    prompts = [
+        scene.render_prompt.strip()
+        for scene in project.scenes
+        if scene.render_prompt.strip()
+    ]
     if len(prompts) != len(project.scenes):
-        error("FLOW_PROMPT_BLANK", "At least one production scene has an empty Flow prompt")
+        error("RENDER_PROMPT_BLANK", "At least one production scene has an empty render prompt")
     if len(prompts) != len(set(prompts)):
-        error("FLOW_PROMPT_DUPLICATE", "Duplicate Flow prompts remain after finalization")
+        error("RENDER_PROMPT_DUPLICATE", "Duplicate render prompts remain after finalization")
     for scene in project.scenes:
-        if scene.source_text.strip() not in scene.flow_prompt:
+        if scene.source_text.strip() not in scene.render_prompt:
             error(
                 "SOURCE_BEAT_NOT_LOCKED",
-                f"{scene.id} Flow prompt does not contain the verbatim screenplay source beat",
+                f"{scene.id} render prompt does not contain the verbatim screenplay source beat",
             )
 
     if project.continuity_score != 100:

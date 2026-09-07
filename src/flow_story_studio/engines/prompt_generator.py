@@ -1,4 +1,4 @@
-"""Canonical visual and Google Flow prompt generation."""
+"""Canonical visual and provider-neutral render prompt generation."""
 
 from __future__ import annotations
 
@@ -91,12 +91,35 @@ def _audio_bible_text(scene: Scene) -> str:
     dialogues = raw.get("dialogue_locks", {})
     if isinstance(dialogues, dict):
         lines.extend(f"{key}: {value}" for key, value in dialogues.items())
+
+    plan = raw.get("scene_audio_plan", {})
+    if isinstance(plan, dict):
+        lines.append("SCENE AUDIO PLAN:")
+        for key in (
+            "ambience",
+            "source_sound_cues",
+            "diegetic_effects",
+            "music",
+            "speech",
+            "silence_required",
+            "continuity",
+            "generation_instruction",
+        ):
+            value = plan.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, list):
+                rendered = " | ".join(str(item) for item in value)
+            else:
+                rendered = str(value)
+            lines.append(f"{key}: {rendered}")
+
     if raw.get("no_unrequested_speech"):
         lines.append("No unrequested speech, narration, or vocalization.")
     return "\n".join(lines) or "Use canonical project audio identity."
 
 
-def make_flow_prompt(
+def make_render_prompt(
     scene: Scene,
     *,
     characters: list[Character],

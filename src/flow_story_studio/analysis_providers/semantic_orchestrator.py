@@ -533,6 +533,87 @@ def _prop_source_state(scene: Scene, prop: Prop) -> str:
     return f"Present in source beat: {prop.name}; canonical source state: {prop.state}"
 
 
+_PROP_COLOR_RE = re.compile(
+    r"\bmàu\s+(?:xanh\s+nhạt|xanh\s+rêu|xanh\s+lá|xanh\s+dương|"
+    r"bạc|đen|vàng|đỏ|trắng|xám|nâu|kem|xanh)\b|"
+    r"\b(?:light\s+blue|olive\s+green|moss\s+green|silver|black|yellow|"
+    r"red|white|gray|grey|brown|cream|green|blue)\b",
+    re.IGNORECASE,
+)
+
+_COLOR_EQUIVALENTS = {
+    "xanh nhat": "light blue",
+    "xanh reu": "olive green",
+    "moss green": "olive green",
+    "xanh la": "green",
+    "xanh duong": "blue",
+    "xanh": "blue",
+    "bac": "silver",
+    "den": "black",
+    "vang": "yellow",
+    "do": "red",
+    "trang": "white",
+    "xam": "gray",
+    "grey": "gray",
+    "nau": "brown",
+    "kem": "cream",
+}
+
+
+def _color_identity(value: str) -> str:
+    key = semantic_key(value)
+    if key.startswith("mau "):
+        key = key[4:]
+    return _COLOR_EQUIVALENTS.get(key, key)
+
+
+def _ground_prop_color_in_text(text: str, prop: Prop) -> str:
+    canonical_source = f"{prop.name}. {prop.description}. {prop.state}"
+    canonical_match = _PROP_COLOR_RE.search(canonical_source)
+    if not canonical_match:
+        return text
+    canonical_phrase = canonical_match.group(0)
+    canonical_color = _color_identity(canonical_phrase)
+    if not canonical_color:
+        return text
+
+    alias_spans: list[tuple[int, int]] = []
+    for alias in _prop_identity_alias(prop.name):
+        pattern = re.escape(alias).replace(r"\ ", r"\s+")
+        alias_spans.extend(
+            (match.start(), match.end())
+            for match in re.finditer(
+                rf"(?<!\w){pattern}(?!\w)", text, re.IGNORECASE | re.UNICODE
+            )
+        )
+    if not alias_spans:
+        return text
+
+    replacements = []
+    for match in _PROP_COLOR_RE.finditer(text):
+        if _color_identity(match.group(0)) == canonical_color:
+            continue
+        nearby = any(
+            0 <= match.start() - alias_end <= 32
+            for _alias_start, alias_end in alias_spans
+        )
+        if nearby:
+            replacements.append((match.start(), match.end()))
+    for start, end in reversed(replacements):
+        text = text[:start] + canonical_phrase + text[end:]
+    return text
+
+
+def ground_canonical_prop_appearance(scene: Scene, props: list[Prop]) -> None:
+    """Prevent AI prose from drifting from source-locked prop appearance."""
+    physical = _physical_source_text(scene)
+    for prop in props:
+        if not _prop_source_match(physical, prop.name) or _prop_negated(physical, prop.name):
+            continue
+        scene.action = _ground_prop_color_in_text(scene.action, prop)
+        scene.summary = _ground_prop_color_in_text(scene.summary, prop)
+
+
 def safe_prop_states(
     scene: Scene,
     props: list[Prop],
@@ -654,6 +735,7 @@ def normalize_semantic_scene(
     previous_scene: Scene | None,
 ) -> None:
     scene.characters = character_presence(scene, characters)
+    ground_canonical_prop_appearance(scene, props)
     direct = _is_direct_continuation(previous_scene, scene)
     previous_props = previous_scene.end_state.prop_positions if previous_scene and direct else {}
     start_props, end_props = safe_prop_states(

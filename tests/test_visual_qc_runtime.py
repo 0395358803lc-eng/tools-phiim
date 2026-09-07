@@ -17,9 +17,9 @@ class FakeVision:
         self.payload = payload
         self.calls = []
 
-    async def vision_json(self, images, prompt):
-        self.calls.append((images, prompt))
-        return self.payload, "vision-test-model"
+    async def vision_json(self, images, prompt, *, model_id=""):
+        self.calls.append((images, prompt, model_id))
+        return self.payload, model_id or "vision-test-model"
 
 
 def _project():
@@ -36,11 +36,26 @@ def test_visual_qc_helpers_are_bounded_and_path_safe(tmp_path: Path):
             "note",
             {"code": "WARN", "severity": "warning", "message": "warning"},
             {"code": "ERR", "severity": "error", "detail": "error"},
+            {
+                "code": "CONTAMINANTS",
+                "severity": "error",
+                "message": "No extra people detected; the scene is clean and consistent.",
+            },
+            {
+                "code": "ANCHORS",
+                "severity": "warning",
+                "message": "No fixed spatial anchors are present.",
+            },
             123,
         ]
     )
-    assert [item.code for item in parsed] == ["VISION_NOTE", "WARN", "ERR"]
-    assert [item.severity for item in parsed] == ["warning", "warning", "error"]
+    assert [item.code for item in parsed] == ["VISION_NOTE", "WARN", "ERR", "ANCHORS"]
+    assert [item.severity for item in parsed] == [
+        "warning",
+        "warning",
+        "error",
+        "warning",
+    ]
 
     inside = tmp_path / "frames" / "one.jpg"
     inside.parent.mkdir(parents=True)
@@ -65,6 +80,7 @@ async def test_inspect_scene_fails_closed_when_video_is_missing(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_inspect_scene_scores_real_frame_files_without_ffmpeg(tmp_path: Path):
     project = _project()
+    project.settings.vision_model = "vision-selected"
     scene = project.scenes[0]
 
     video = tmp_path / "renders" / project.id / scene.id / "scene.mp4"
@@ -111,9 +127,10 @@ async def test_inspect_scene_scores_real_frame_files_without_ffmpeg(tmp_path: Pa
 
     assert report.status == "Passed"
     assert report.score == 94
-    assert report.model_id == "vision-test-model"
+    assert report.model_id == "vision-selected"
     assert len(vision.calls) == 1
     assert len(vision.calls[0][0]) == 5
+    assert vision.calls[0][2] == "vision-selected"
 
 
 @pytest.mark.asyncio
@@ -153,6 +170,7 @@ async def test_continuity_qc_is_not_applicable_without_direct_predecessor(tmp_pa
 @pytest.mark.asyncio
 async def test_continuity_qc_compares_boundary_frames(tmp_path: Path, monkeypatch):
     project = _project()
+    project.settings.vision_model = "vision-selected"
     previous = project.scenes[0]
     current = previous.model_copy(deep=True)
     current.id = "SC-002"
@@ -189,5 +207,6 @@ async def test_continuity_qc_compares_boundary_frames(tmp_path: Path, monkeypatc
 
     assert report.status == "Passed"
     assert report.score == 94
-    assert report.model_id == "vision-test-model"
+    assert report.model_id == "vision-selected"
     assert len(vision.calls[0][0]) == 2
+    assert vision.calls[0][2] == "vision-selected"

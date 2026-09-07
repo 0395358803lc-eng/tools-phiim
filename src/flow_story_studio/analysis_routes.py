@@ -90,8 +90,10 @@ def build_analysis_router(
             try:
                 project = await service.analyze_with_provider(request, xkiro, progress)
                 if auto_pipeline:
-                    progress("Phân tích hoàn tất; đang đưa các cảnh vào hàng đợi video")
-                    await queue.enqueue(project.id, [])
+                    progress(
+                        "Phân tích hoàn tất; Auto Pipeline dừng tại Master Gate. "
+                        "Phải tạo và nghiệm thu toàn bộ Project Masters trước khi production."
+                    )
                 job["project"] = {
                     "id": project.id,
                     "name": project.name,

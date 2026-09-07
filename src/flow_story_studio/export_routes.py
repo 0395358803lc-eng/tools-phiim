@@ -25,17 +25,17 @@ def build_export_router(*, required: Callable[[str], Project]) -> APIRouter:
             headers={"Content-Disposition": f'attachment; filename="{project.id}.json"'},
         )
 
-    @router.get("/api/projects/{project_id}/flow-prompts.zip")
+    @router.get("/api/projects/{project_id}/render-prompts.zip")
     async def export_prompts(project_id: str) -> StreamingResponse:
         project = required(project_id)
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
             for scene in project.scenes:
-                archive.writestr(f"{scene.id}_prompt.txt", scene.flow_prompt)
+                archive.writestr(f"{scene.id}_prompt.txt", scene.render_prompt)
             archive.writestr(
                 "project_prompts.json",
                 json.dumps(
-                    {scene.id: scene.flow_prompt for scene in project.scenes},
+                    {scene.id: scene.render_prompt for scene in project.scenes},
                     ensure_ascii=False,
                     indent=2,
                 ),
@@ -45,7 +45,7 @@ def build_export_router(*, required: Callable[[str], Project]) -> APIRouter:
             output,
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="{project.id}_flow_prompts.zip"'
+                "Content-Disposition": f'attachment; filename="{project.id}_render_prompts.zip"'
             },
         )
 

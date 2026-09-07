@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#071018">
   <title>TH Media · AI Story Production</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=1.8.3">
+  <link rel="stylesheet" href="/assets/styles.css?v=1.8.11">
 </head>
 <body>
   <div class="app-shell">
@@ -19,7 +19,7 @@
         <h1 id="projectTitle">Chưa có dự án</h1>
       </div>
       <div class="top-actions">
-        <button class="status-pill" id="providerStatus" title="Mở thiết lập tạo video"><i></i> Thiết lập video</button>
+        <button class="status-pill" id="googleFlowStatus" title="Quản lý phiên đăng nhập Google Flow"><i></i> Chưa có phiên Google Flow</button>
         <button class="ghost-btn" id="videoSetupBtn">Thiết lập video</button>
         <button class="ghost-btn" id="openProjectsBtn">Mở đã lưu</button>
         <button class="ghost-btn" id="exportBtn" disabled>Xuất project</button>
@@ -54,11 +54,25 @@
         </section>
         <section class="tab-content" data-panel="bible">
           <div id="storyBible"></div>
-          <div class="section-heading"><span>Nhân vật</span><em id="characterCount">0</em></div>
+          <div class="master-library-intro">
+            <strong>MASTER REFERENCE LIBRARY</strong>
+            <span>Mỗi nhân vật, bối cảnh và đạo cụ chỉ có một Master cấp Project. Các scene phía dưới chỉ REUSE Master này, không tạo lại entity.</span>
+            <div class="master-library-actions">
+              <div class="master-vision-config">
+                <select id="masterVisionModelInput" aria-label="Master Vision QC model">
+                  <option value="">Chưa chọn Vision QC model</option>
+                </select>
+                <button class="secondary-btn" id="saveMasterVisionModelBtn" type="button">Lưu Vision model</button>
+              </div>
+              <button class="primary-btn" id="generateMissingMastersBtn" type="button">Tạo tất cả Master còn thiếu</button>
+              <small id="masterBatchStatus">Vision QC sẽ duyệt từng Master trước khi chuyển sang Master tiếp theo.</small>
+            </div>
+          </div>
+          <div class="section-heading"><span>Nhân vật · Character Masters</span><em id="characterCount">0</em></div>
           <div class="bible-list" id="characterBible"></div>
-          <div class="section-heading"><span>Bối cảnh</span><em id="locationCount">0</em></div>
+          <div class="section-heading"><span>Bối cảnh · Location Masters</span><em id="locationCount">0</em></div>
           <div class="bible-list" id="locationBible"></div>
-          <div class="section-heading"><span>Đạo cụ</span><em id="propCount">0</em></div>
+          <div class="section-heading"><span>Đạo cụ · Prop Masters</span><em id="propCount">0</em></div>
           <div class="bible-list" id="propBible"></div>
         </section>
         <section class="tab-content" data-panel="settings">
@@ -90,9 +104,10 @@
         </div>
         <nav class="editor-tabs" id="editorTabs">
           <button class="active" data-editor-tab="edit">Biên tập</button>
-          <button data-editor-tab="prompt">Flow Prompt</button>
+          <button data-editor-tab="prompt">Render Prompt</button>
           <button data-editor-tab="continuity">Continuity</button>
           <button data-editor-tab="result">Kết quả</button>
+          <button class="image-plan-tab" data-editor-tab="image">Tạo ảnh</button>
         </nav>
         <div class="editor-scroll empty-copy" id="editorEmpty">Chọn một scene trong storyboard để biên tập.</div>
         <form class="editor-scroll hidden" id="sceneForm">
@@ -112,19 +127,20 @@
             </div>
             <label><span>Voiceover</span><textarea id="editVoiceover" rows="4"></textarea></label>
             <label><span>Dialogue (JSON)</span><textarea id="editDialogues" rows="4"></textarea></label>
-            <label><span>Reference image / last frame</span><input id="editReference" readonly placeholder="Tự động lấy từ scene trước hoặc tải ảnh lên"></label>
+            <label><span>Scene start-frame override / last-frame anchor</span><input id="editReference" readonly placeholder="Chỉ dùng cho riêng scene hoặc tự động lấy frame cuối scene trước"></label>
             <div class="reference-upload-row">
               <input id="referenceFile" type="file" accept="image/jpeg,image/png,image/webp">
-              <button class="secondary-btn" id="uploadReferenceBtn" type="button">Tải ảnh tham chiếu</button>
+              <button class="secondary-btn" id="uploadReferenceBtn" type="button">Tải frame riêng cho scene</button>
             </div>
+            <p class="helper">Ảnh này không phải Character/Location/Prop Master. Master Reference được quản lý duy nhất ở Project → Bible.</p>
             <label><span>Visual prompt</span><textarea id="editVisualPrompt" rows="8"></textarea></label>
             <button class="primary-btn full" id="saveSceneBtn" type="submit">Lưu thay đổi scene</button>
           </section>
           <section class="editor-page" data-editor-panel="prompt">
-            <div class="copy-heading"><span>Google Flow prompt</span><button type="button" id="copyPromptBtn">Sao chép</button></div>
-            <textarea class="code-area" id="editFlowPrompt" rows="26"></textarea>
+            <div class="copy-heading"><span>Render prompt</span><button type="button" id="copyPromptBtn">Sao chép</button></div>
+            <textarea class="code-area" id="editRenderPrompt" rows="26"></textarea>
             <p class="helper">Prompt này đã gồm Character Bible, Location Bible, camera, start/end frame và negative constraints.</p>
-            <button class="primary-btn full" type="button" id="savePromptBtn">Lưu Flow prompt</button>
+            <button class="primary-btn full" type="button" id="savePromptBtn">Lưu render prompt</button>
           </section>
           <section class="editor-page" data-editor-panel="continuity">
             <div class="continuity-map">
@@ -143,9 +159,88 @@
             <div class="quality-card" id="qualityCard"></div>
             <button class="primary-btn full" type="button" id="generateSceneBtn">Generate / Regenerate scene</button>
           </section>
+          <section class="editor-page image-plan-page" data-editor-panel="image">
+            <div class="image-plan-head">
+              <div>
+                <span class="eyebrow">SCENE IMAGE CONTINUITY PLAN</span>
+                <h3>Tạo ảnh nhất quán cho cảnh</h3>
+              </div>
+              <span class="image-plan-status" id="imagePlanStatus">PLANNED</span>
+            </div>
+            <div class="image-plan-grid">
+              <article class="image-plan-card">
+                <span>START FRAME</span>
+                <strong id="imageStartStrategy">—</strong>
+                <p id="imageStartRequirement">—</p>
+                <small id="imageStartSource">—</small>
+              </article>
+              <article class="image-plan-card">
+                <span>TARGET / EXIT KEYFRAME</span>
+                <strong id="imageTargetStrategy">—</strong>
+                <p>Ảnh đích khóa trạng thái cuối cảnh để video không trôi mặt, bối cảnh hoặc đạo cụ.</p>
+                <small id="imageAnchorScene">—</small>
+              </article>
+            </div>
+            <div class="scene-image-previews" id="sceneImagePreviews">
+              <figure>
+                <figcaption>START FRAME</figcaption>
+                <div class="scene-image-preview empty-copy" id="sceneStartImagePreview">Chưa có ảnh Start</div>
+              </figure>
+              <figure>
+                <figcaption>TARGET / EXIT FRAME</figcaption>
+                <div class="scene-image-preview empty-copy" id="sceneTargetImagePreview">Chưa có ảnh Target</div>
+              </figure>
+            </div>
+            <div class="section-heading"><span>Master References được REUSE</span><em id="imageReferenceCount">0</em></div>
+            <div class="image-reference-list" id="imageReferenceList"></div>
+            <div class="image-lock-block">
+              <label class="field-label">Identity lock</label>
+              <div class="prompt-box" id="imageIdentityLock">—</div>
+              <label class="field-label spaced">Composition lock</label>
+              <div class="prompt-box" id="imageCompositionLock">—</div>
+            </div>
+            <div class="copy-heading"><span>Prompt ảnh khởi đầu</span><button type="button" id="copyStartImagePromptBtn">Sao chép</button></div>
+            <textarea class="code-area image-prompt-area" id="startImagePrompt" rows="14" readonly></textarea>
+            <div class="copy-heading"><span>Prompt ảnh đích / end keyframe</span><button type="button" id="copyTargetImagePromptBtn">Sao chép</button></div>
+            <textarea class="code-area image-prompt-area" id="targetImagePrompt" rows="14" readonly></textarea>
+            <label class="field-label spaced">Negative constraints</label>
+            <div class="prompt-box" id="imageNegativePrompt">—</div>
+            <section class="scene-image-model-config">
+              <div>
+                <span class="eyebrow">GOOGLE FLOW IMAGE MODEL</span>
+                <strong>Model tạo ảnh cho toàn project</strong>
+                <small id="imageModelMeta">Chưa tải danh sách model ảnh.</small>
+              </div>
+              <div class="scene-image-model-actions">
+                <select id="sceneImageModelInput" aria-label="Google Flow Image Model">
+                  <option value="">Chọn model tạo ảnh...</option>
+                </select>
+                <button class="secondary-btn" id="saveSceneImageModelBtn" type="button">Lưu model ảnh</button>
+              </div>
+            </section>
+            <div class="image-renderer-note">
+              <strong>IMAGE RENDERER</strong>
+              <span>Renderer ảnh dùng cùng provider production của project. Với Google Flow Browser, Master References được upload làm Ingredients; Start/Target keyframe được tải ngược về TH Media sau khi tạo.</span>
+            </div>
+            <button class="primary-btn full" id="generateImageBtn" type="button" disabled>Tạo ảnh cảnh · Chưa có renderer ảnh</button>
+          </section>
         </form>
       </section>
     </main>
+
+    <section class="operation-status-bar idle" id="operationStatusBar" aria-live="polite">
+      <div class="operation-status-main">
+        <span class="operation-state" id="operationState">SẴN SÀNG</span>
+        <div class="operation-copy">
+          <strong id="operationTitle">Không có tác vụ đang chạy</strong>
+          <small id="operationStage">Nhấn một tính năng để bắt đầu.</small>
+        </div>
+        <span class="operation-percent" id="operationPercent">0%</span>
+        <button class="operation-dismiss" id="operationDismissBtn" type="button" title="Ẩn thông báo">×</button>
+      </div>
+      <div class="operation-progress"><i id="operationProgress"></i></div>
+      <div class="operation-detail" id="operationDetail"></div>
+    </section>
 
     <footer class="actionbar">
       <div class="continuity-meter">
@@ -196,7 +291,9 @@
             </div>
             <p class="helper">Key mới chỉ thay thế key đang dùng sau khi xKiro xác thực thành công.</p>
           </div>
-          <label><span>Mô hình khả dụng (<b id="modelCount">0</b> · <b id="freeModelCount">0</b> miễn phí)</span><select id="analysisModelInput" disabled><option value="">Kết nối API key để tải mô hình...</option></select></label>
+          <label><span>Mô hình AI phân tích nội dung (<b id="modelCount">0</b> · <b id="freeModelCount">0</b> miễn phí)</span><select id="analysisModelInput" disabled><option value="">Kết nối API key để tải mô hình...</option></select></label>
+          <label><span>Mô hình AI Vision nghiệm thu hình ảnh/video (<b id="visionModelCount">0</b> model Vision)</span><select id="visionModelInput" disabled><option value="">Kết nối API key để tải model Vision...</option></select></label>
+          <p class="helper">Model Vision sẽ kiểm tra 5 frame của mỗi clip sau render và continuity giữa frame cuối cảnh trước với frame đầu cảnh sau. Chỉ model có capability Vision từ catalog xKiro mới được liệt kê.</p>
         </div>
       </section>
       <section class="analysis-log hidden" id="analysisLogPanel" aria-live="polite">
@@ -217,36 +314,48 @@
   </dialog>
 
   <dialog class="modal narrow" id="videoSetupModal">
-    <form method="dialog" id="videoSetupForm">
-      <div class="modal-head"><div><span class="eyebrow">BƯỚC 03 · TẠO VIDEO</span><h2>Thiết lập mô hình video</h2></div><button class="close-btn" value="cancel" type="submit">×</button></div>
-      <p class="step-helper">Bước này chỉ mở sau khi nội dung đã được phân tích. Model được lưu theo project; thông tin đăng nhập được mã hóa và dùng lại ở các phiên sau.</p>
-      <label><span>Render provider</span><select id="providerInput"><option value="google-flow">Google Flow · Flow CLI</option><option value="mock">Mock / Demo</option></select></label>
-      <section class="ai-config flow-config" id="flowConfig">
-        <div class="ai-config-head">
-          <div><span class="eyebrow">AI VIDEO GENERATION</span><strong>Google Flow · Flow CLI</strong></div>
-          <span class="secure-note">Phiên Flow CLI · cookie được mã hóa bằng DPAPI</span>
-        </div>
-        <label><span>Video model</span><select id="videoModelInput"><option value="veo-3.1-lite-lower-priority">Veo 3.1 Lite · Lower priority</option></select></label>
-        <div class="credential-overview">
-          <div class="connection-line" id="flowConnection"><i></i><span>Đang kiểm tra thông tin đã lưu...</span></div>
-          <button class="secondary-btn" type="button" id="verifyFlowBtn">Kiểm tra</button>
-          <button class="secondary-btn" type="button" id="openFlowBrowserBtn">Mở Chrome đăng nhập Flow</button>
-          <button class="secondary-btn credential-edit-btn" type="button" id="editFlowBtn">Nhập cookie dự phòng</button>
-        </div>
-        <div class="credential-editor hidden" id="flowCredentialEditor">
-          <label><span>Phiên Flow CLI (cookies.json hoặc Cookie header)</span><textarea id="flowCookieInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Dán cookie hoặc chọn cookies.json để xác thực Flow CLI"></textarea></label>
-          <div class="flow-cookie-actions">
-            <label class="file-picker"><input id="flowCookieFile" type="file" accept=".json,.txt">Chọn cookies.json</label>
-            <button class="secondary-btn" type="button" id="connectFlowBtn">Lưu phiên Flow CLI</button>
-            <button class="ghost-btn" type="button" id="cancelFlowEditBtn">Hủy</button>
-            <button class="danger-ghost-btn" type="button" id="disconnectFlowBtn">Xóa phiên Flow CLI</button>
-          </div>
-          <p class="helper">Cookie là phương án dự phòng. Ưu tiên Chrome Flow profile riêng/CDP để dùng phiên đăng nhập thật mà không đụng Chrome chính.</p>
-        </div>
-        <p class="helper">Render, reference image và recovery đều dùng Flow CLI tích hợp. Không nhập mật khẩu Google vào ứng dụng.</p>
+    <form id="videoSetupForm">
+      <div class="modal-head"><div><span class="eyebrow">RENDER ENGINE</span><h2>Thiết lập render</h2></div><button class="close-btn" id="closeVideoSetupBtn" type="button">×</button></div>
+      <p class="step-helper">Chọn renderer production, model và độ phân giải. Google Flow Browser dùng đúng Chrome profile active đã đăng nhập ở nút Google Flow Session.</p>
+      <label><span>Render provider</span><select id="providerInput"><option value="unconfigured">Chưa cấu hình</option></select></label>
+      <label><span>Video model</span><select id="videoModelInput"><option value="">Chọn model</option></select></label>
+      <label><span>Độ phân giải</span><select id="videoResolutionInput"><option value="720p">720p</option><option value="360p">360p</option></select></label>
+      <section class="ai-config">
+        <div class="connection-line" id="renderConnection"><i></i><span>Đang kiểm tra render engine...</span></div>
+        <div class="flow-session-meta" id="renderCapabilityMeta"></div>
+        <p class="helper" id="renderSetupHelper">Generate chỉ được bật khi provider mà project đang chọn thực sự sẵn sàng.</p>
       </section>
-      <div class="modal-actions"><button class="secondary-btn" value="cancel" type="submit">Đóng</button><button class="primary-btn" id="saveVideoSetupBtn" value="default" type="submit">Lưu thiết lập</button></div>
+      <div class="modal-actions">
+        <button class="secondary-btn" id="cancelVideoSetupBtn" type="button">Hủy</button>
+        <button class="primary-btn" id="saveVideoSetupBtn" type="submit">Lưu cấu hình</button>
+      </div>
     </form>
+  </dialog>
+
+  <dialog class="modal narrow" id="googleFlowSessionModal">
+    <div class="modal-head"><div><span class="eyebrow">GOOGLE FLOW SESSION</span><h2>Phiên đăng nhập Google Flow</h2></div><button class="close-btn" id="closeGoogleFlowSessionBtn" type="button">×</button></div>
+    <p class="step-helper">TH Media mở Google Chrome bằng profile riêng của ứng dụng. Bạn tự đăng nhập Google trong Chrome; ứng dụng không yêu cầu, đọc hoặc lưu mật khẩu và không import/export cookie.</p>
+    <section class="ai-config flow-session-card">
+      <div class="connection-line" id="googleFlowSessionConnection"><i></i><span>Đang kiểm tra phiên đã lưu...</span></div>
+      <div class="flow-session-meta" id="googleFlowSessionMeta"></div>
+    </section>
+    <div class="flow-session-actions">
+      <button class="secondary-btn" id="openGoogleFlowSessionBtn" type="button">Mở Google Flow bằng phiên hiện tại</button>
+      <button class="primary-btn" id="newGoogleFlowSessionBtn" type="button">Tạo phiên đăng nhập mới</button>
+    </div>
+    <section class="flow-session-pending hidden" id="googleFlowPendingPanel">
+      <div class="warning-item ok">
+        <strong>Chrome đã mở bằng một profile mới.</strong>
+        <span>Hãy đăng nhập tài khoản Google bạn muốn dùng, truy cập được Google Flow, rồi quay lại TH Media và xác nhận phiên mới.</span>
+      </div>
+      <div class="flow-session-actions">
+        <button class="secondary-btn" id="reopenGoogleFlowPendingBtn" type="button">Mở lại cửa sổ đăng nhập</button>
+        <button class="primary-btn" id="activateGoogleFlowPendingBtn" type="button">Xác nhận dùng phiên mới</button>
+        <button class="danger-ghost-btn" id="cancelGoogleFlowPendingBtn" type="button">Hủy phiên mới</button>
+      </div>
+    </section>
+    <p class="helper">Khi xác nhận phiên mới, profile mới sẽ trở thành phiên active cho renderer Google Flow sau này. Phiên cũ chỉ bị chuyển sang inactive, không bị ghi đè trong lúc bạn đang đăng nhập.</p>
+    <div class="modal-actions"><button class="primary-btn" id="doneGoogleFlowSessionBtn" type="button">Đóng</button></div>
   </dialog>
 
   <dialog class="modal narrow" id="projectsModal">
@@ -274,6 +383,6 @@
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="toast" id="toast"></div>
-  <script src="/assets/app.js?v=1.8.3"></script>
+  <script src="/assets/app.js?v=1.8.11"></script>
 </body>
 </html>

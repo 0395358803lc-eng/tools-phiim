@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from ..engines.analyzer import GENERIC_REFERENCE_NAMES
-from ..engines.prompt_generator import make_flow_prompt, make_visual_prompt
+from ..engines.prompt_generator import make_render_prompt, make_visual_prompt
 from ..models import Character, ContinuityState, Dialogue, Location, Project, Prop, StoryBible
 from .finalization import finalize_project
 
@@ -411,9 +411,13 @@ def _assert_production_invariants(project: Project) -> None:
             if not set(state.prop_positions) <= prop_ids:
                 raise ValueError(f"Invalid prop state in {scene.id}")
 
-    prompts = [scene.flow_prompt.strip() for scene in project.scenes if scene.flow_prompt.strip()]
+    prompts = [
+        scene.render_prompt.strip()
+        for scene in project.scenes
+        if scene.render_prompt.strip()
+    ]
     if len(prompts) != len(set(prompts)):
-        raise ValueError("Duplicate Flow prompts detected before production")
+        raise ValueError("Duplicate render prompts detected before production")
 
 
 def merge_analysis(draft: Project, data: dict[str, Any], model: str) -> Project:
@@ -662,7 +666,7 @@ def merge_analysis(draft: Project, data: dict[str, Any], model: str) -> Project:
             start_state=scene.start_state,
             end_state=scene.end_state,
         )
-        scene.flow_prompt = make_flow_prompt(
+        scene.render_prompt = make_render_prompt(
             scene,
             characters=visible,
             location=location,

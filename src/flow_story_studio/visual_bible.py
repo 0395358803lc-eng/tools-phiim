@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from .engines.continuity import enforce_frame_anchor_policy
 from .film.canonical import DependencyMode
 from .film.dependency import classify_dependency
+from .film.image_plan import compile_project_image_plans
 from .film.orchestrator import prepare
 from .models import Project, SceneVisualPlan, VisualBible, VisualReference
 
@@ -18,13 +21,100 @@ def _character_lock(item) -> str:
     )
 
 
-def _location_lock(item) -> str:
-    objects = ", ".join(item.objects) if item.objects else "fixed environmental objects"
+_TRANSIENT_LOCATION_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    (r"(?i)rain[- ]facing window", "window"),
+    (r"(?i)rainy window", "window"),
+    (r"(?i)rain window", "window"),
+    (r"(?i)cửa sổ có mưa bên ngoài", "cửa sổ"),
+    (r"(?i)cửa sổ mưa", "cửa sổ"),
+    (r"(?i)đêm mưa", ""),
+    (r"(?i)mưa nhẹ", ""),
+    (r"(?i)rainy[- ]night", ""),
+    (r"(?i)rainy", ""),
+    (r"(?i)rain", ""),
+    (r"(?i)\b23:\d{2}\b", ""),
+    (r"(?i)\b\d{1,2}:\d{2}\b", ""),
+    (r"(?i)công suất thấp", ""),
+    (r"(?i)low[- ]output", ""),
+    (r"(?i)hallway spill", ""),
+    (r"(?i)light spill", ""),
+    (r"(?i)rim light", ""),
+    (r"(?i)ambient xanh lạnh", ""),
+    (r"(?i)cold blue ambient", ""),
+)
+
+
+def _stable_location_fragment(value: object) -> str:
+    text = str(value or "")
+    for pattern, replacement in _TRANSIENT_LOCATION_REPLACEMENTS:
+        text = re.sub(pattern, replacement, text)
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"(?:[,;]\s*){2,}", "; ", text)
+    return text.strip(" ,;.-")
+
+
+def canonical_location_lock(item) -> str:
+    """Build a reusable location identity that excludes scene-state attributes."""
+    stable_objects = [
+        cleaned
+        for raw in item.objects
+        if (cleaned := _stable_location_fragment(raw))
+    ]
+    objects = ", ".join(stable_objects) if stable_objects else "fixed environmental objects"
     return (
-        f"{item.id} {item.name}: {item.place_type}; architecture {item.architecture}; "
-        f"layout {item.space}; interior {item.interior}; colors {item.colors}; "
-        f"spatial anchors {item.spatial_anchors}; fixed objects {objects}."
+        f"{item.id} {item.name}: {_stable_location_fragment(item.place_type)}; "
+        f"architecture {_stable_location_fragment(item.architecture)}; "
+        f"layout {_stable_location_fragment(item.space)}; "
+        f"interior {_stable_location_fragment(item.interior)}; "
+        f"spatial anchors {_stable_location_fragment(item.spatial_anchors)}; "
+        f"fixed objects {objects}. "
+        "CANONICAL BASELINE EXCLUDES time-of-day, weather/precipitation, temporary lighting "
+        "intensity/color/spill, people, action props, temporary clutter and readable display "
+        "content. Fixed windows, doors and light fixtures may remain as physical anchors, but "
+        "exterior weather and fixture on/off/intensity/color state are scene-level only."
     )
+
+
+def canonical_reference_lock(project: Project, reference: VisualReference) -> str:
+    if reference.entity_type == "location":
+        item = next(
+            (
+                location
+                for location in getattr(project, "locations", [])
+                if location.id == reference.entity_id
+            ),
+            None,
+        )
+        if item is not None:
+            return canonical_location_lock(item)
+    if reference.entity_type == "character":
+        item = next(
+            (
+                character
+                for character in getattr(project, "characters", [])
+                if character.id == reference.entity_id
+            ),
+            None,
+        )
+        if item is not None:
+            return _character_lock(item)
+    if reference.entity_type == "prop":
+        item = next(
+            (
+                prop
+                for prop in getattr(project, "props", [])
+                if prop.id == reference.entity_id
+            ),
+            None,
+        )
+        if item is not None:
+            return _prop_lock(item)
+    return reference.lock_text
+
+
+def _location_lock(item) -> str:
+    return canonical_location_lock(item)
 
 
 def _prop_lock(item) -> str:
@@ -186,4 +276,4 @@ def build_visual_bible(project: Project) -> Project:
         project.scenes[0].start_state.notes = (
             "Opening scene; establish from canonical source truth and visual references."
         )
-    return project
+    return compile_project_image_plans(project)

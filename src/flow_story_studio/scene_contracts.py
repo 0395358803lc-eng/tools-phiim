@@ -26,7 +26,7 @@ def _contract_payload(scene: Scene) -> dict[str, object]:
         "atmosphere": scene.atmosphere,
         "duration": scene.duration,
         "visual_prompt": scene.visual_prompt,
-        "flow_prompt": scene.flow_prompt,
+        "render_prompt": scene.render_prompt,
         "voiceover": scene.voiceover,
         "dialogues": [item.model_dump(mode="json") for item in scene.dialogues],
         "start_state": scene.start_state.model_dump(mode="json"),

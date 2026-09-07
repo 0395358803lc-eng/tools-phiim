@@ -8,7 +8,8 @@ from copy import deepcopy
 from .analysis_providers.xkiro import XKiroClient
 from .engines.analyzer import analyze_story
 from .engines.continuity import check_project
-from .engines.prompt_generator import make_flow_prompt, make_visual_prompt
+from .engines.prompt_generator import make_render_prompt, make_visual_prompt
+from .film.image_plan import compile_project_image_plans
 from .models import (
     AnalyzeRequest,
     ContinuityQCReport,
@@ -46,7 +47,7 @@ def _recompile_project_prompts(project: Project) -> Project:
             start_state=scene.start_state,
             end_state=scene.end_state,
         )
-        scene.flow_prompt = make_flow_prompt(
+        scene.render_prompt = make_render_prompt(
             scene,
             characters=characters,
             location=location,
@@ -154,19 +155,106 @@ class StudioService:
         _ensure_project_not_rendering(project, operation)
         return project
 
+    def refresh_after_master_reference_change(
+        self,
+        project: Project,
+        reference_id: str,
+    ) -> Project:
+        """Invalidate every production artifact that depended on one Master Reference."""
+        _ensure_project_not_rendering(project, "thay Master Reference")
+
+        affected: set[int] = set()
+        for index, scene in enumerate(project.scenes):
+            reference_ids = {
+                *scene.visual_plan.character_reference_ids,
+                *scene.visual_plan.prop_reference_ids,
+            }
+            if scene.visual_plan.location_reference_id:
+                reference_ids.add(scene.visual_plan.location_reference_id)
+            if reference_id not in reference_ids:
+                continue
+
+            affected.add(index)
+            downstream = index + 1
+            while (
+                downstream < len(project.scenes)
+                and project.scenes[downstream].visual_plan.dependency_mode == "direct"
+            ):
+                affected.add(downstream)
+                downstream += 1
+
+        for index in sorted(affected):
+            scene = project.scenes[index]
+            _invalidate_render_evidence(scene)
+            scene.image_plan.generated_start_frame = ""
+            scene.image_plan.generated_target_frame = ""
+
+        compile_project_image_plans(project)
+        if affected:
+            project.final_video = FinalVideo(status="NotReady")
+        return project
+
+    def update_vision_settings(
+        self,
+        project_id: str,
+        vision_model: str,
+    ) -> Project:
+        project = self.get_idle_project(project_id, "đổi Vision QC model")
+        selected = vision_model.strip()
+        if not selected:
+            raise ValueError("Vision QC model không được để trống")
+        if project.settings.vision_model == selected:
+            return project
+
+        project.settings.vision_model = selected
+        for scene in project.scenes:
+            scene.visual_qc = VisualQCReport()
+            scene.continuity_qc = ContinuityQCReport()
+            scene.acceptance = ProductionAcceptance()
+            if scene.status == "Accepted":
+                scene.status = "Waiting"
+                scene.progress = 0
+        project.final_video = FinalVideo(status="NotReady")
+        return self.storage.save(project)
+
+    def update_image_settings(
+        self,
+        project_id: str,
+        image_model: str,
+    ) -> Project:
+        project = self.get_idle_project(project_id, "đổi image model")
+        selected = image_model.strip()
+        if not selected:
+            raise ValueError("Image model không được để trống")
+        if project.settings.image_model == selected:
+            return project
+
+        project.settings.image_model = selected
+        for scene in project.scenes:
+            _invalidate_render_evidence(scene)
+            scene.image_plan.generated_start_frame = ""
+            scene.image_plan.generated_target_frame = ""
+        compile_project_image_plans(project)
+        project.final_video = FinalVideo(status="NotReady")
+        return self.storage.save(project)
+
     def update_video_settings(
         self,
         project_id: str,
         provider: str,
         video_model: str,
+        resolution: str | None = None,
     ) -> Project:
         project = self.get_idle_project(project_id, "đổi provider hoặc video model")
+        next_resolution = resolution or project.settings.resolution
         changed = (
             project.settings.provider != provider
             or project.settings.video_model != video_model
+            or project.settings.resolution != next_resolution
         )
         project.settings.provider = provider
         project.settings.video_model = video_model
+        project.settings.resolution = next_resolution
         if changed:
             for scene in project.scenes:
                 _invalidate_render_evidence(scene)
@@ -221,7 +309,7 @@ class StudioService:
                 start_state=scene.start_state,
                 end_state=scene.end_state,
             )
-            scene.flow_prompt = make_flow_prompt(
+            scene.render_prompt = make_render_prompt(
                 scene,
                 characters=characters,
                 location=location,

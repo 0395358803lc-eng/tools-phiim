@@ -1,31 +1,15 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $projectRoot
-
 if (-not (Test-Path -LiteralPath ".venv\Scripts\python.exe")) {
     python -m venv .venv
     if ($LASTEXITCODE -ne 0) { throw "Unable to create .venv" }
 }
-
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $constraints = Join-Path $projectRoot "requirements.lock.txt"
-if (-not (Test-Path -LiteralPath $constraints)) {
-    throw "requirements.lock.txt is required for reproducible setup"
-}
-
-$flowCliWheel = Get-ChildItem -LiteralPath (Join-Path $projectRoot "vendor") -Filter "flow_cli-*.whl" | Select-Object -First 1
-if (-not $flowCliWheel) { throw "Vendored Flow CLI wheel not found" }
-
-& $python -m pip install -c $constraints $flowCliWheel.FullName
-if ($LASTEXITCODE -ne 0) { throw "Flow CLI install failed" }
-
+if (-not (Test-Path -LiteralPath $constraints)) { throw "requirements.lock.txt is required" }
 & $python -m pip install -c $constraints -e .
 if ($LASTEXITCODE -ne 0) { throw "Project dependency install failed" }
-
-& $python -m playwright install chromium
-if ($LASTEXITCODE -ne 0) { throw "Playwright Chromium install failed" }
-
 Write-Host "Setup completed."
-Write-Host "Google Flow video transport: gflow-cli 0.68.0 @ 438f5cf (flow.google.com T2V/I2V)."
-Write-Host "Open TH Media, connect the saved Google Flow session, then verify it before rendering."
+Write-Host "Render engine: not configured."
 Write-Host "Run .\start.ps1 to launch TH Media."

@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 
-from .flow_media import ffmpeg_path
+from .media_tools import ffmpeg_path
 from .models import AudioQCReport, Project, Scene, VisualIssue
 
 
@@ -189,7 +189,7 @@ class AudioQCAnalyzer:
                 issues=[
                     VisualIssue(
                         code="AUDIO_STREAM_MISSING",
-                        message="Rendered Google Flow scene has no audio stream.",
+                        message="Rendered scene has no audio stream.",
                     )
                 ],
             )

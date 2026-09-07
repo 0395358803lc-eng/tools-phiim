@@ -4,12 +4,6 @@ Set-Location -LiteralPath $projectRoot
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $python)) { throw "Missing .venv\Scripts\python.exe" }
 
-$flowCli = Get-ChildItem vendor -Filter 'flow_cli-*.whl' | Select-Object -First 1
-if (-not $flowCli) { throw "Vendored Flow CLI wheel not found" }
-$expectedFlowCliHash = "62d4441b388bbee6b1955bfd2c44655cc40377a031aa045ec8c3e28682100931"
-$actualFlowCliHash = (Get-FileHash -LiteralPath $flowCli.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualFlowCliHash -ne $expectedFlowCliHash) { throw "Vendored Flow CLI SHA-256 mismatch" }
-
 & $python -m pip check
 if ($LASTEXITCODE -ne 0) { throw "pip check failed" }
 & $python -m ruff check .

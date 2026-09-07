@@ -148,7 +148,7 @@ def test_audio_bible_is_canonical_and_embedded_in_prompt() -> None:
     scene = project.scenes[0]
     audio_locks = scene.orchestration["audio_locks"]
     assert audio_locks["ambience_lock_id"] == scene.location_id
-    assert "CANONICAL AUDIO BIBLE LOCKS:" in scene.flow_prompt
+    assert "CANONICAL AUDIO BIBLE LOCKS:" in scene.render_prompt
     assert scene.render_contract["audio_locks"] == audio_locks
 
 

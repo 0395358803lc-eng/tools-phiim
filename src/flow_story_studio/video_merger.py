@@ -281,9 +281,9 @@ class VideoMerger:
             )
         expected_duration = float(sum(scene.duration for scene in project.scenes))
         all_audio = await self._all_clips_have_audio(ffmpeg, clips)
-        if project.settings.provider == "google-flow" and not all_audio:
+        if project.settings.provider != "mock" and not all_audio:
             raise VideoMergeError(
-                "Final merge bị chặn: ít nhất một scene Google Flow đã mất audio stream"
+                "Final merge bị chặn: ít nhất một scene render đã mất audio stream"
             )
         audio_filter = self._final_audio_filter(project)
         audio_filter_args = (

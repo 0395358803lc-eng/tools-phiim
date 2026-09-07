@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..models import Project
+from .beat_integrity import duplicate_scene_pairs
 from .bridge import build_canonical_film_model
 from .canonical import ValidationResult
 
@@ -54,6 +55,14 @@ def validate_project_hard_constraints(project: Project) -> ValidationResult:
                     f"{previous.id}->{scene.id}: direct boundary state mismatch"
                 )
         previous = scene
+
+    for previous_id, current_id, action_score, summary_score, source_score in duplicate_scene_pairs(
+        project
+    ):
+        errors.append(
+            f"{previous_id}->{current_id}: duplicated production beat "
+            f"(action={action_score:.2f}, summary={summary_score:.2f}, source={source_score:.2f})"
+        )
 
     return ValidationResult(
         is_valid=not errors,

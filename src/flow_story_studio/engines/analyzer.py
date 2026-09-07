@@ -29,7 +29,7 @@ from ..models import (
 from ..scene_contracts import seal_project_contracts
 from ..visual_bible import build_visual_bible
 from .continuity import check_project
-from .prompt_generator import global_visual_style, make_flow_prompt, make_visual_prompt
+from .prompt_generator import global_visual_style, make_render_prompt, make_visual_prompt
 from .segmenter import (
     SCENE_CONTEXT_PREFIX,
     SCENE_CONTEXT_SUFFIX,
@@ -793,7 +793,7 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             atmosphere=story_bible.mood,
             duration=duration,
             visual_prompt="",
-            flow_prompt="",
+            render_prompt="",
             voiceover="",
             dialogues=[],
             start_state=start_state,
@@ -813,7 +813,7 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             start_state=scene.start_state,
             end_state=scene.end_state,
         )
-        scene.flow_prompt = make_flow_prompt(
+        scene.render_prompt = make_render_prompt(
             scene,
             characters=visible_characters,
             location=location,
@@ -861,7 +861,7 @@ def analyze_story(request: AnalyzeRequest) -> Project:
             start_state=scene.start_state,
             end_state=scene.end_state,
         )
-        scene.flow_prompt = make_flow_prompt(
+        scene.render_prompt = make_render_prompt(
             scene,
             characters=visible_characters,
             location=location_by_id[scene.location_id],

@@ -83,9 +83,10 @@ def transport(chat_hook=None) -> httpx.MockTransport:
                         },
                         {
                             "id": "openai/test-paid",
-                            "display_name": "Test Paid",
+                            "display_name": "Test Paid Vision",
                             "owned_by": "openai",
                             "access_tier": "paid",
+                            "capabilities": {"reasoning": True, "vision": True},
                         },
                     ],
                 },
@@ -150,7 +151,7 @@ async def test_xkiro_connect_catalog_and_analysis() -> None:
         )
     )
     assert project.story_bible.main_theme == "Cuộc gặp gỡ bí ẩn trong cửa hàng"
-    assert "có chủ đích" in project.scenes[0].flow_prompt
+    assert "có chủ đích" in project.scenes[0].render_prompt
     assert project.timeline[-1] == "Story analysis provider: xKiro · qwen/test-free"
 
 
@@ -328,6 +329,65 @@ async def test_xkiro_rejects_bad_key() -> None:
         await client.connect("sk-xt-invalid")
 
 
+@pytest.mark.asyncio
+async def test_selected_vision_model_is_strict_and_capability_checked(tmp_path: Path) -> None:
+    used_models: list[str] = []
+
+    def vision_hook(_request: httpx.Request, body: dict) -> httpx.Response | None:
+        content = body["messages"][-1]["content"]
+        if not isinstance(content, list):
+            return None
+        used_models.append(body["model"])
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"score": 99, "issues": []}),
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = XKiroClient(transport=transport(vision_hook))
+    await client.connect("sk-xt-valid")
+    image = tmp_path / "frame.jpg"
+    image.write_bytes(b"frame")
+
+    payload, model_id = await client.vision_json(
+        [image],
+        "Return JSON.",
+        model_id="openai/test-paid",
+    )
+
+    assert payload["score"] == 99
+    assert model_id == "openai/test-paid"
+    assert used_models == ["openai/test-paid"]
+
+    with pytest.raises(XKiroError, match="unavailable or no longer vision-capable"):
+        await client.vision_json(
+            [image],
+            "Return JSON.",
+            model_id="qwen/test-free",
+        )
+
+    with pytest.raises(XKiroError, match="không hỗ trợ phân tích hình ảnh"):
+        await client.analyze(
+            AnalyzeRequest(
+                name="invalid vision selection",
+                original_text=TEXT,
+                settings=VideoSettings(
+                    analysis_provider="xkiro",
+                    analysis_model="qwen/test-free",
+                    vision_model="qwen/test-free",
+                ),
+            )
+        )
+
+
 def test_xkiro_api_routes(tmp_path: Path) -> None:
     client = XKiroClient(transport=transport())
     app = create_app(ProjectStorage(tmp_path / "projects"), xkiro_client=client)
@@ -338,6 +398,9 @@ def test_xkiro_api_routes(tmp_path: Path) -> None:
             "qwen/test-free",
             "openai/test-paid",
         }
+        vision_models = test_client.get("/api/ai/xkiro/models?vision_only=true")
+        assert vision_models.status_code == 200
+        assert [item["id"] for item in vision_models.json()] == ["openai/test-paid"]
 
         connected = test_client.post("/api/ai/xkiro/connect", json={"api_key": "sk-xt-valid"})
         assert connected.status_code == 200
@@ -351,6 +414,7 @@ def test_xkiro_api_routes(tmp_path: Path) -> None:
                 "settings": {
                     "analysis_provider": "xkiro",
                     "analysis_model": "qwen/test-free",
+                    "vision_model": "openai/test-paid",
                 },
             },
         )
@@ -366,6 +430,9 @@ def test_xkiro_api_routes(tmp_path: Path) -> None:
             time.sleep(0.02)
         assert job["status"] == "completed"
         assert job["project"]["scenes"]
+        saved_project = test_client.get(f"/api/projects/{job['project']['id']}")
+        assert saved_project.status_code == 200
+        assert saved_project.json()["settings"]["vision_model"] == "openai/test-paid"
         assert any(entry["level"] == "success" for entry in job["logs"])
         assert not list((tmp_path / "analysis-checkpoints").glob("*.sqlite3"))
 
@@ -672,3 +739,64 @@ def test_world_merge_prevents_semantic_id_hijack() -> None:
     assert merged["characters"][1]["id"] == "CHAR_002"
     assert merged["locations"][1]["id"] == "LOC_002"
     assert merged["props"][1]["id"] == "PROP_002"
+
+
+
+@pytest.mark.asyncio
+async def test_vision_retries_same_selected_model_on_transient_server_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    attempts = 0
+    used_models: list[str] = []
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "flow_story_studio.analysis_providers.xkiro.asyncio.sleep",
+        no_sleep,
+    )
+    monkeypatch.setenv("XKIRO_VISION_RETRIES", "3")
+
+    def flaky_vision(_request: httpx.Request, body: dict) -> httpx.Response | None:
+        nonlocal attempts
+        content = body["messages"][-1]["content"]
+        if not isinstance(content, list):
+            return None
+        attempts += 1
+        used_models.append(body["model"])
+        if attempts < 3:
+            return httpx.Response(
+                500,
+                json={"error": {"message": "A server error occurred. Please try again."}},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"score": 97, "issues": []}),
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = XKiroClient(transport=transport(flaky_vision))
+    await client.connect("sk-xt-valid")
+    image = tmp_path / "frame.jpg"
+    image.write_bytes(b"frame")
+
+    payload, model_id = await client.vision_json(
+        [image],
+        "Return JSON.",
+        model_id="openai/test-paid",
+    )
+
+    assert payload["score"] == 97
+    assert model_id == "openai/test-paid"
+    assert attempts == 3
+    assert used_models == ["openai/test-paid", "openai/test-paid", "openai/test-paid"]

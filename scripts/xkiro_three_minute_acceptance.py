@@ -49,9 +49,9 @@ def assess(project: object) -> dict[str, object]:
     ]
     orders = [scene.order for scene in scenes]
     expected_orders = list(range(1, len(scenes) + 1))
-    duplicate_flow_prompts = [
+    duplicate_render_prompts = [
         value
-        for value, count in Counter(scene.flow_prompt for scene in scenes).items()
+        for value, count in Counter(scene.render_prompt for scene in scenes).items()
         if value and count > 1
     ]
 
@@ -64,8 +64,8 @@ def assess(project: object) -> dict[str, object]:
         "unique_summary": unique_count([scene.summary for scene in scenes]),
         "unique_action": unique_count([scene.action for scene in scenes]),
         "unique_camera": unique_count([scene.camera for scene in scenes]),
-        "unique_flow_prompt": unique_count([scene.flow_prompt for scene in scenes]),
-        "duplicate_flow_prompt_count": len(duplicate_flow_prompts),
+        "unique_render_prompt": unique_count([scene.render_prompt for scene in scenes]),
+        "duplicate_render_prompt_count": len(duplicate_render_prompts),
         "bad_location_refs": bad_locations,
         "bad_character_refs": bad_characters,
         "bad_prop_refs": bad_props,

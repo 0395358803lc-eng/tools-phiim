@@ -1,59 +1,55 @@
-"""FastAPI routes for external AI/video integrations."""
+"""FastAPI routes for external AI integration and neutral render status."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
 from .analysis_providers.xkiro import XKiroClient, XKiroError
-from .flow_integration import FlowCLIIntegration, FlowIntegrationError
-from .models import (
-    FlowConnection,
-    FlowCookieConnectRequest,
-    FlowVideoModel,
-    XKiroConnection,
-    XKiroConnectRequest,
-    XKiroModel,
-)
+from .models import XKiroConnection, XKiroConnectRequest, XKiroModel
+from .providers.registry import ProviderRegistry
 
 
-def build_integration_router(
-    flow: FlowCLIIntegration,
-    xkiro: XKiroClient,
-) -> APIRouter:
+def build_integration_router(xkiro: XKiroClient, providers: ProviderRegistry) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/video/flow/status", response_model=FlowConnection)
-    async def flow_status(verify: bool = Query(default=False)) -> FlowConnection:
-        try:
-            return await flow.status(verify=verify)
-        except FlowIntegrationError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @router.get("/api/video/flow/models", response_model=list[FlowVideoModel])
-    async def flow_models() -> list[FlowVideoModel]:
-        return list((await flow.status()).models)
-
-    @router.post("/api/video/flow/connect", response_model=FlowConnection)
-    async def flow_connect(request: FlowCookieConnectRequest) -> FlowConnection:
-        try:
-            return await flow.connect(request.cookie)
-        except FlowIntegrationError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-    @router.post("/api/video/flow/browser/start", response_model=FlowConnection)
-    async def flow_browser_start() -> FlowConnection:
-        try:
-            return await flow.start_browser_session()
-        except FlowIntegrationError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @router.delete("/api/video/flow", response_model=FlowConnection)
-    async def flow_disconnect() -> FlowConnection:
-        try:
-            flow.disconnect()
-            return await flow.status()
-        except FlowIntegrationError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    @router.get("/api/render/status")
+    async def render_status() -> dict[str, object]:
+        configured = providers.configured_names()
+        production = [name for name in configured if name != "mock"]
+        details: dict[str, dict[str, object]] = {}
+        for name in providers.names():
+            if name == "unconfigured":
+                details[name] = {
+                    "configured": False,
+                    "provider": name,
+                    "message": "Chưa cấu hình render backend.",
+                }
+                continue
+            provider = providers.get(name)
+            if provider is None:
+                continue
+            try:
+                health = await provider.health()
+            except Exception as exc:
+                health = {
+                    "ok": False,
+                    "configured": False,
+                    "provider": name,
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            details[name] = dict(health)
+        return {
+            "provider": production[0] if production else "unconfigured",
+            "configured": bool(production),
+            "message": (
+                "Render backend đã sẵn sàng."
+                if production
+                else "Chưa có render backend production sẵn sàng."
+            ),
+            "available_providers": providers.names(),
+            "configured_providers": configured,
+            "provider_details": details,
+        }
 
     @router.get("/api/ai/xkiro/status", response_model=XKiroConnection)
     async def xkiro_status(include_models: bool = Query(default=False)) -> XKiroConnection:
@@ -64,10 +60,15 @@ def build_integration_router(
 
     @router.get("/api/ai/xkiro/models", response_model=list[XKiroModel])
     async def xkiro_models(
-        free_only: bool = Query(default=False), refresh: bool = Query(default=False)
+        free_only: bool = Query(default=False),
+        vision_only: bool = Query(default=False),
+        refresh: bool = Query(default=False),
     ) -> list[XKiroModel]:
         try:
-            return await xkiro.list_models(free_only=free_only, refresh=refresh)
+            models = await xkiro.list_models(free_only=free_only, refresh=refresh)
+            if vision_only:
+                models = [item for item in models if bool(item.capabilities.get("vision"))]
+            return models
         except XKiroError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

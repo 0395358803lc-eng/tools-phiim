@@ -74,12 +74,10 @@ def test_legacy_credentials_migrate_per_file_without_overwrite(tmp_path: Path) -
 
     (new_root / "xkiro-api-key.bin").write_bytes(b"new-xkiro")
     (legacy_root / "xkiro-api-key.bin").write_bytes(b"old-xkiro")
-    (legacy_root / "google-flow.cookies.bin").write_bytes(b"legacy-flow")
 
     _migrate_legacy_credentials(new_root, legacy_root)
 
     assert (new_root / "xkiro-api-key.bin").read_bytes() == b"new-xkiro"
-    assert (new_root / "google-flow.cookies.bin").read_bytes() == b"legacy-flow"
 
 
 def test_legacy_credentials_migrate_per_file(monkeypatch, tmp_path: Path) -> None:
@@ -94,7 +92,6 @@ def test_legacy_credentials_migrate_per_file(monkeypatch, tmp_path: Path) -> Non
 
     (new_secrets / "xkiro-api-key.bin").write_bytes(b"new-xkiro")
     (legacy_secrets / "xkiro-api-key.bin").write_bytes(b"legacy-xkiro")
-    (legacy_secrets / "google-flow.cookies.bin").write_bytes(b"legacy-flow")
 
     def fake_user_data_dir(app_name: str, _author: str) -> str:
         return str(tmp_path / app_name)
@@ -104,4 +101,3 @@ def test_legacy_credentials_migrate_per_file(monkeypatch, tmp_path: Path) -> Non
 
     assert session._credential_root == new_secrets.resolve()
     assert (new_secrets / "xkiro-api-key.bin").read_bytes() == b"new-xkiro"
-    assert (new_secrets / "google-flow.cookies.bin").read_bytes() == b"legacy-flow"

@@ -6,8 +6,17 @@ from pathlib import Path
 
 from .analysis_providers.xkiro import XKiroClient, XKiroError
 from .engines.continuity import is_direct_continuation
-from .flow_media import VisualFrames, extract_visual_frames
-from .models import ContinuityQCReport, Project, Scene, VisualIssue, VisualQCReport
+from .media_tools import VisualFrames, extract_visual_frames
+from .models import (
+    ContinuityQCReport,
+    Project,
+    Scene,
+    VisualIssue,
+    VisualQCReport,
+    VisualReference,
+)
+from .production_gate import is_master_blocking_issue, master_reference_threshold
+from .visual_bible import canonical_reference_lock
 
 
 def _bounded(value: object, default: int = 0) -> int:
@@ -18,15 +27,52 @@ def _bounded(value: object, default: int = 0) -> int:
     return max(0, min(100, number))
 
 
+def _looks_like_positive_non_issue(message: str) -> bool:
+    text = " ".join(message.casefold().split())
+    if not text:
+        return False
+    if any(token in text for token in (" but ", " however ", " although ", " except ")):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "scene is clean",
+            "reference is clean",
+            "no extra people",
+            "no extra objects",
+            "no contaminants",
+            "no contamination",
+            "no issue detected",
+            "no issues detected",
+            "no problem detected",
+            "no problems detected",
+        )
+    ) and any(
+        marker in text
+        for marker in (
+            "detected",
+            "present",
+            "clean",
+            "consistent",
+        )
+    )
+
+
 def _issues(values: object) -> list[VisualIssue]:
     if not isinstance(values, list):
         return []
     result: list[VisualIssue] = []
     for item in values:
         if isinstance(item, str):
-            result.append(VisualIssue(code="VISION_NOTE", severity="warning", message=item[:500]))
+            message = item[:500]
+            if _looks_like_positive_non_issue(message):
+                continue
+            result.append(VisualIssue(code="VISION_NOTE", severity="warning", message=message))
             continue
         if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or item.get("detail") or "")[:500]
+        if _looks_like_positive_non_issue(message):
             continue
         result.append(
             VisualIssue(
@@ -34,7 +80,7 @@ def _issues(values: object) -> list[VisualIssue]:
                 severity="warning"
                 if str(item.get("severity", "")).casefold() == "warning"
                 else "error",
-                message=str(item.get("message") or item.get("detail") or "")[:500],
+                message=message,
             )
         )
     return result
@@ -69,6 +115,61 @@ def _data_path(data_root: Path, relative: str) -> Path | None:
     except ValueError:
         return None
     return candidate if candidate.is_file() else None
+
+
+def _reference_scene_context(project: Project, reference: VisualReference) -> str:
+    """Summarize every downstream scene that depends on one Project Master."""
+    rows: list[str] = []
+    for scene in project.scenes:
+        ids = set(scene.visual_plan.character_reference_ids)
+        ids.update(scene.visual_plan.prop_reference_ids)
+        if scene.visual_plan.location_reference_id:
+            ids.add(scene.visual_plan.location_reference_id)
+        if reference.id not in ids:
+            continue
+        rows.append(
+            f"{scene.id} | location={scene.location_id} | "
+            f"lighting={scene.lighting[:220]} | action={scene.action[:300]} | "
+            f"source={scene.source_text[:500]}"
+        )
+    if not rows:
+        return "No downstream scene currently references this Master."
+    return "\n".join(rows)
+
+
+def _master_qc_rules(reference: VisualReference) -> str:
+    if reference.entity_type == "character":
+        return (
+            "CHARACTER MASTER RULES: This must be a neutral reusable identity asset, not a scene. "
+            "Require a clean neutral/studio-like background, non-dramatic inspection lighting, "
+            "neutral pose/expression, exact locked garment types, stable face/hair/body identity, "
+            "and no scene-specific weather/action/scenery. Use issue code "
+            "scene_specific_background for an environmental backdrop, "
+            "scene_specific_lighting for dramatic/colored lighting, "
+            "action_pose for a narrative pose, wardrobe_mismatch for wrong garment type, "
+            "hair_mismatch/age_mismatch/appearance_mismatch for observable lock conflicts. "
+            "Those are blocking production defects."
+        )
+    if reference.entity_type == "location":
+        return (
+            "LOCATION MASTER RULES: Judge the persistent intersection across ALL downstream "
+            "scenes. Require defining architecture/layout/fixed equipment and repeatable spatial "
+            "anchors. "
+            "Do not bake scene-specific weather, temporary light state, readable displays, people, "
+            "handheld/action props or transient clutter into canonical identity. Use issue codes "
+            "layout_mismatch, missing_spatial_anchor, scene_specific_weather, "
+            "scene_specific_lighting, transient_story_prop, people_present or readable_text "
+            "for blocking defects. Ordinary stable furniture/decor is allowed."
+        )
+    if reference.entity_type == "prop":
+        return (
+            "PROP MASTER RULES: Require isolated reusable identity with exact locked form, "
+            "material, color, scale and baseline state. Scene-specific handling/state changes "
+            "belong to scenes, not the Master. Use issue codes shape_mismatch, "
+            "material_mismatch, color_mismatch, "
+            "state_mismatch or background_contamination for blocking defects."
+        )
+    return "Judge strict reusable canonical identity and source compliance."
 
 
 class VisualQCAnalyzer:
@@ -177,7 +278,11 @@ issues is an array of objects with code,
 severity ('warning' or 'error'), message. score must reflect production acceptability.
 """
         try:
-            data, model_id = await self.xkiro.vision_json(images, prompt)
+            data, model_id = await self.xkiro.vision_json(
+                images,
+                prompt,
+                model_id=project.settings.vision_model,
+            )
         except XKiroError as exc:
             return VisualQCReport(
                 status="Unavailable",
@@ -226,27 +331,205 @@ severity ('warning' or 'error'), message. score must reflect production acceptab
         self,
         reference,
         relative_path: str,
+        *,
+        model_id: str = "",
+    ) -> tuple[int, list[VisualIssue]]:
+        return await self._inspect_reference(
+            reference,
+            relative_path,
+            model_id=model_id,
+        )
+
+    async def inspect_reference_for_project(
+        self,
+        project: Project,
+        reference: VisualReference,
+        relative_path: str,
+        *,
+        model_id: str = "",
+    ) -> tuple[int, list[VisualIssue]]:
+        if not callable(getattr(self.xkiro, "vision_json", None)):
+            return await self.inspect_reference(
+                reference,
+                relative_path,
+                model_id=model_id,
+            )
+        return await self._inspect_reference(
+            reference,
+            relative_path,
+            model_id=model_id,
+            project=project,
+        )
+
+    async def inspect_reference_against_anchor(
+        self,
+        reference,
+        relative_path: str,
+        identity_anchor_path: str,
+        *,
+        model_id: str = "",
+    ) -> tuple[int, list[VisualIssue]]:
+        return await self._inspect_reference(
+            reference,
+            relative_path,
+            model_id=model_id,
+            identity_anchor_path=identity_anchor_path,
+        )
+
+    async def inspect_reference_against_anchor_for_project(
+        self,
+        project: Project,
+        reference: VisualReference,
+        relative_path: str,
+        identity_anchor_path: str,
+        *,
+        model_id: str = "",
+    ) -> tuple[int, list[VisualIssue]]:
+        if not callable(getattr(self.xkiro, "vision_json", None)):
+            return await self.inspect_reference_against_anchor(
+                reference,
+                relative_path,
+                identity_anchor_path,
+                model_id=model_id,
+            )
+        return await self._inspect_reference(
+            reference,
+            relative_path,
+            model_id=model_id,
+            identity_anchor_path=identity_anchor_path,
+            project=project,
+        )
+
+    async def _inspect_reference(
+        self,
+        reference: VisualReference,
+        relative_path: str,
+        *,
+        model_id: str = "",
+        identity_anchor_path: str = "",
+        project: Project | None = None,
     ) -> tuple[int, list[VisualIssue]]:
         target = _data_path(self.data_root, relative_path)
         if not target:
             return 0, [
                 VisualIssue(code="REFERENCE_MISSING", message="Reference image file is missing.")
             ]
-        prompt = f"""You are a strict canonical visual reference inspector.
+
+        anchor = _data_path(self.data_root, identity_anchor_path) if identity_anchor_path else None
+        if anchor == target:
+            anchor = None
+
+        if anchor is None:
+            mode_prompt = """
+BOOTSTRAP MODE ? THIS IMAGE IS THE FIRST CANONICAL MASTER FOR THIS ENTITY.
+There is intentionally no earlier canonical image to compare against. The supplied image is being
+qualified to BECOME the persistent identity baseline. Judge only observable suitability against the
+locked specification and production-reference hygiene. Do NOT reject, lower the score, or emit
+identity_not_established / missing_prior_reference / cannot_verify_identity merely because no prior
+canonical image exists. Identity persistence across later scenes is enforced by comparing future
+outputs against this approved Master, not by requiring a predecessor for the first Master.
+"""
+            images = [target]
+        else:
+            mode_prompt = """
+COMPARISON MODE ? TWO IMAGES ARE PROVIDED.
+Image 1 is the existing identity anchor/baseline. Image 2 is the candidate replacement or corrected
+Master. The candidate must preserve the same canonical identity/world design while fixing only real
+defects. Reject identity drift between Image 1 and Image 2 in addition to ordinary specification
+violations.
+"""
+            images = [anchor, target]
+
+        downstream_context = (
+            _reference_scene_context(project, reference)
+            if project is not None
+            else "Downstream scene context was not supplied."
+        )
+        threshold = (
+            master_reference_threshold(project, reference)
+            if project is not None
+            else 85
+        )
+        locked_specification = (
+            canonical_reference_lock(project, reference)
+            if project is not None
+            else reference.lock_text
+        )
+        prompt = f"""You are a strict Project Master acceptance inspector.
 Entity type: {reference.entity_type}
 Entity name: {reference.name}
-Locked specification: {reference.lock_text}
-Judge whether the supplied image is suitable as a persistent production identity reference.
-Reject identity ambiguity, extra people/objects that contaminate the reference, alternate costume
-variants, wrong architecture/layout, wrong prop shape/material/color/state, or major mismatch with
-the locked specification. Return exactly one JSON object with integer score 0-100 and issues array.
-issues uses objects with code, severity ('warning' or 'error'), message.
+Locked specification: {locked_specification}
+{mode_prompt}
+
+DOWNSTREAM SCENES THAT WILL REUSE THIS MASTER:
+{downstream_context}
+
+{_master_qc_rules(reference)}
+
+Judge SOURCE COMPLIANCE and REUSABILITY, not beauty. A cinematic-looking image can still fail if it
+bakes one scene's background, lighting, weather, action, text or transient state into canonical
+identity. Do not infer ethnicity, nationality, brands or story facts that are absent from
+source truth. For locations, stable furniture/decor is allowed; transient clutter/action props
+are not.
+For bootstrap Masters, do not penalize the lack of an earlier identity image.
+
+Return exactly one JSON object with integer 0-100 fields:
+spec_match, identity_clarity, downstream_reusability, transient_state_control, continuity_safety,
+score, and issues.
+score MUST equal the LOWEST of those five component scores, not an average.
+Any component below {threshold} is production-blocking.
+issues is an array of objects with code, severity ('warning' or 'error'), message.
+Use the canonical blocking issue codes described above whenever they apply, and mark them error.
+Only report real observable defects; omit categories that pass.
 """
         try:
-            data, _model_id = await self.xkiro.vision_json([target], prompt)
+            data, _model_id = await self.xkiro.vision_json(
+                images,
+                prompt,
+                model_id=model_id,
+            )
         except XKiroError as exc:
             return 0, [VisualIssue(code="VISION_UNAVAILABLE", message=str(exc)[:500])]
-        return _bounded(data.get("score")), _issues(data.get("issues"))
+
+        component_names = (
+            "spec_match",
+            "identity_clarity",
+            "downstream_reusability",
+            "transient_state_control",
+            "continuity_safety",
+        )
+        present_components = {
+            name: _bounded(data.get(name))
+            for name in component_names
+            if name in data
+        }
+        score = (
+            min(present_components.values())
+            if present_components
+            else _bounded(data.get("score"))
+        )
+        issues = _issues(data.get("issues"))
+        if project is not None:
+            issues.extend(
+                _component_failures(
+                    present_components,
+                    threshold,
+                    prefix="MASTER",
+                )
+            )
+        normalized: list[VisualIssue] = []
+        for issue in issues:
+            if is_master_blocking_issue(reference, issue.code) and issue.severity != "error":
+                normalized.append(
+                    VisualIssue(
+                        code=issue.code,
+                        severity="error",
+                        message=issue.message,
+                    )
+                )
+            else:
+                normalized.append(issue)
+        return score, normalized
 
     async def inspect_continuity(
         self,
@@ -281,7 +564,11 @@ integer scores 0-100: character_match, location_match, wardrobe_match, prop_stat
 lighting_match, screen_direction_match, score, and issues. issues uses code/severity/message.
 """
         try:
-            data, model_id = await self.xkiro.vision_json([previous_last, current_first], prompt)
+            data, model_id = await self.xkiro.vision_json(
+                [previous_last, current_first],
+                prompt,
+                model_id=project.settings.vision_model,
+            )
         except XKiroError as exc:
             return ContinuityQCReport(
                 status="Unavailable",

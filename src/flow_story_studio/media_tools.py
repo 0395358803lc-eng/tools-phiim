@@ -1,4 +1,4 @@
-"""Local media helpers for Google Flow rendering and post-render QC."""
+"""Provider-neutral local media helpers for rendering and post-render QC."""
 
 from __future__ import annotations
 

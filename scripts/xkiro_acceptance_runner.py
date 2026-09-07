@@ -293,7 +293,7 @@ def scene_text(scene: dict[str, Any]) -> str:
         scene.get("atmosphere", ""),
         scene.get("voiceover", ""),
         scene.get("visual_prompt", ""),
-        scene.get("flow_prompt", ""),
+        scene.get("render_prompt", ""),
     ]
     for state_key in ("start_state", "end_state"):
         state = scene.get(state_key, {})

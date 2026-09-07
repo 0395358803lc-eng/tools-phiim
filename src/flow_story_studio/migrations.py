@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-CURRENT_PROJECT_SCHEMA_VERSION = 4
+CURRENT_PROJECT_SCHEMA_VERSION = 5
 
 
 def migrate_project_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,6 +58,22 @@ def migrate_project_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 scene["status"] = "Waiting"
         migrated["schema_version"] = 4
         version = 4
+
+    if version == 4:
+        settings = migrated.setdefault("settings", {})
+        provider = str(settings.get("provider") or "")
+        if provider == "google-flow":
+            settings["provider"] = "unconfigured"
+            settings["video_model"] = ""
+        elif not provider:
+            settings["provider"] = "unconfigured"
+        for scene in migrated.get("scenes", []):
+            if "flow_prompt" in scene and "render_prompt" not in scene:
+                scene["render_prompt"] = scene.pop("flow_prompt")
+        if "flow_project_id" in migrated and "provider_project_id" not in migrated:
+            migrated["provider_project_id"] = migrated.pop("flow_project_id")
+        migrated["schema_version"] = 5
+        version = 5
 
     if version != CURRENT_PROJECT_SCHEMA_VERSION:
         raise ValueError(f"Unable to migrate project schema version: {version}")

@@ -10,13 +10,14 @@ import pytest
 from flow_story_studio.analysis_providers.xkiro import XKiroClient
 from flow_story_studio.engines.analyzer import analyze_story
 from flow_story_studio.film.state_delta import continuity_state_hash
-from flow_story_studio.flow_media import extract_visual_frames, ffmpeg_path
+from flow_story_studio.media_tools import extract_visual_frames, ffmpeg_path
 from flow_story_studio.models import AnalyzeRequest, ProductionAcceptance, VideoSettings
 from flow_story_studio.providers.base import RenderResult
+from flow_story_studio.providers.registry import ProviderRegistry
 from flow_story_studio.reference_manager import (
     ReferenceManager,
-    promote_accepted_scene_references,
     resolve_scene_reference,
+    scene_outputs_cannot_promote_master_references,
 )
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.storage import ProjectStorage
@@ -63,7 +64,7 @@ def test_offline_analyze_injects_source_grounded_audio_lock() -> None:
             settings=VideoSettings(scene_duration=8),
         )
     )
-    prompt = "\n".join(scene.flow_prompt for scene in project.scenes)
+    prompt = "\n".join(scene.render_prompt for scene in project.scenes)
     assert "AUDIO / DIALOGUE LOCK:" in prompt
     assert 'ALEX: "I found the ticket."' in prompt
     assert 'MAYA: "Do not leave."' in prompt
@@ -177,7 +178,9 @@ def test_no_vietnamese_mojibake_in_source() -> None:
     assert not offenders, "\n".join(offenders)
 
 
-def test_accepted_anchor_promotes_and_resolves_visual_references(tmp_path: Path) -> None:
+def test_accepted_scene_cannot_promote_output_frame_to_master_reference(
+    tmp_path: Path,
+) -> None:
     project = analyze_story(AnalyzeRequest(name="refs", original_text=SCRIPT))
     scene = project.scenes[0]
     middle = Path("references") / project.id / "qc" / f"{scene.id}-middle.jpg"
@@ -188,7 +191,7 @@ def test_accepted_anchor_promotes_and_resolves_visual_references(tmp_path: Path)
     scene.visual_qc.status = "Passed"
     scene.acceptance = ProductionAcceptance(status="Accepted", score=95)
 
-    assert promote_accepted_scene_references(project, scene)
+    assert not scene_outputs_cannot_promote_master_references(project, scene)
     relevant_ids = {
         *scene.visual_plan.character_reference_ids,
         scene.visual_plan.location_reference_id,
@@ -196,21 +199,24 @@ def test_accepted_anchor_promotes_and_resolves_visual_references(tmp_path: Path)
     }
     refs = [item for item in project.visual_bible.references if item.id in relevant_ids]
     assert refs
-    assert all(item.status == "approved" for item in refs)
-    assert all(item.approved_reference == middle.as_posix() for item in refs)
-    assert resolve_scene_reference(project, scene, tmp_path) == middle.as_posix()
+    assert all(item.status != "approved" for item in refs)
+    assert all(not item.approved_reference for item in refs)
+    assert resolve_scene_reference(project, scene, tmp_path) == ""
 
 
 @pytest.mark.asyncio
 async def test_mock_post_render_qc_stamps_render_settings_identity(tmp_path: Path) -> None:
     storage = ProjectStorage(tmp_path / "projects")
-    project = analyze_story(AnalyzeRequest(name="render identity", original_text=SCRIPT))
+    project = analyze_story(
+        AnalyzeRequest(
+            name="render identity",
+            original_text=SCRIPT,
+            settings=VideoSettings(provider="mock"),
+        )
+    )
     scene = project.scenes[0]
 
-    class FakeFlow:
-        configured = True
-
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    queue = RenderQueue(storage)
     await queue._post_render_qc(project, scene)
 
     assert scene.acceptance.status == "Accepted"
@@ -223,23 +229,26 @@ def test_direct_scene_is_blocked_until_predecessor_is_accepted(tmp_path: Path) -
     project = analyze_story(AnalyzeRequest(name="dependency", original_text=SCRIPT))
     if len(project.scenes) < 2:
         pytest.skip("Need two production scenes")
-    project.settings.provider = "google-flow"
+    project.settings.provider = "test-renderer"
     previous, current = project.scenes[:2]
     current.visual_plan.dependency_mode = "direct"
     current.location_id = previous.location_id
+    current.image_plan.status = "Ready"
     previous.status = "FailedQC"
     previous.acceptance.status = "Rejected"
     storage.save(project)
     calls: list[str] = []
 
-    class FakeFlow:
+    class FakeRenderer:
         configured = True
 
-        async def generate(self, _project, scene, checkpoint=None) -> RenderResult:
+        async def generate(self, _project, scene) -> RenderResult:
             calls.append(scene.id)
             return RenderResult(job_id="unexpected")
 
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    registry = ProviderRegistry()
+    registry.register("test-renderer", FakeRenderer())
+    queue = RenderQueue(storage, provider_registry=registry)
 
     async def run() -> None:
         await queue.enqueue(project.id, [current.id])
@@ -257,13 +266,19 @@ def test_direct_scene_is_blocked_until_predecessor_is_accepted(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Path) -> None:
     project = analyze_story(AnalyzeRequest(name="reference generation", original_text=SCRIPT))
+    project.settings.vision_model = "vision-selected"
     reference = project.visual_bible.references[0]
 
-    class FakeFlow:
+    class FakeRenderer:
         configured = True
 
         async def generate_reference_image(
-            self, current_project, reference_id: str, prompt: str
+            self,
+            current_project,
+            reference_id: str,
+            prompt: str,
+            *,
+            ingredient_files=None,
         ) -> str:
             assert current_project is project
             assert reference_id == reference.id
@@ -277,12 +292,15 @@ async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Pat
             return relative.as_posix()
 
     class FakeVision:
-        async def inspect_reference(self, current, image_relative: str):
+        async def inspect_reference(self, current, image_relative: str, *, model_id=""):
             assert current.id == reference.id
             assert image_relative.endswith(f"{reference.id}.png")
+            assert model_id == "vision-selected"
             return 98, []
 
-    manager = ReferenceManager(FakeFlow(), FakeVision(), tmp_path)  # type: ignore[arg-type]
+    manager = ReferenceManager(
+        FakeRenderer(), FakeVision(), tmp_path
+    )  # type: ignore[arg-type]
     assert await manager.ensure_reference(project, reference)
     assert reference.status == "approved"
     assert reference.approved_reference
@@ -303,10 +321,7 @@ def test_direct_dependency_blocks_stale_start_state_hash(tmp_path: Path) -> None
     previous.accepted_state_hash = continuity_state_hash(previous.accepted_end_state)
     current.start_state.notes = "stale mutation after accepted state commit"
 
-    class FakeFlow:
-        configured = True
-
-    queue = RenderQueue(storage, FakeFlow())  # type: ignore[arg-type]
+    queue = RenderQueue(storage)
     queue._is_finally_accepted = lambda _project, _scene: True  # type: ignore[method-assign]
 
     reason = queue._dependency_block_reason(project, current)

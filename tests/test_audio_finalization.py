@@ -163,7 +163,7 @@ Em đang ở đâu?
         "Em đang ở đâu?",
     ]
 
-def test_flow_prompt_contains_explicit_source_grounded_delivery_channels() -> None:
+def test_render_prompt_contains_explicit_source_grounded_delivery_channels() -> None:
     project = analyze_story(
         AnalyzeRequest(
             name="audio delivery prompt",
@@ -174,7 +174,7 @@ def test_flow_prompt_contains_explicit_source_grounded_delivery_channels() -> No
     scene1 = next(scene for scene in project.scenes if "SCENE 1" in scene.source_text)
     scene2 = next(scene for scene in project.scenes if "SCENE 2" in scene.source_text)
 
-    assert "[delivery: phone;" in scene1.flow_prompt
-    assert "[delivery: recorded;" in scene2.flow_prompt
-    assert 'MAYA: "Do not leave."' in scene1.flow_prompt
-    assert 'ALEX: "If I hear this, I forgot again."' in scene2.flow_prompt
+    assert "[delivery: phone;" in scene1.render_prompt
+    assert "[delivery: recorded;" in scene2.render_prompt
+    assert 'MAYA: "Do not leave."' in scene1.render_prompt
+    assert 'ALEX: "If I hear this, I forgot again."' in scene2.render_prompt

@@ -16,7 +16,6 @@
 | bandit                    | 1.9.4     | Apache-2.0                                                     | https://bandit.readthedocs.io/                                                     |
 | boolean.py                | 5.0       | BSD-2-Clause                                                   | https://github.com/bastikr/boolean.py                                              |
 | bottle                    | 0.13.4    | MIT License                                                    | http://bottlepy.org/                                                               |
-| browser-cookie3           | 0.20.1    | lgpl                                                           | https://github.com/borisbabic/browser_cookie3                                      |
 | certifi                   | 2026.7.22 | Mozilla Public License 2.0 (MPL 2.0)                           | https://github.com/certifi/python-certifi                                          |
 | cffi                      | 2.1.1     | MIT-0                                                          | https://cffi.readthedocs.io/en/latest/whatsnew.html                                |
 | charset-normalizer        | 3.5.1     | MIT                                                            | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md               |
@@ -29,10 +28,8 @@
 | defusedxml                | 0.7.1     | Python Software Foundation License                             | https://github.com/tiran/defusedxml                                                |
 | fastapi                   | 0.141.1   | MIT                                                            | https://github.com/fastapi/fastapi                                                 |
 | filelock                  | 3.32.5    | MIT                                                            | https://github.com/tox-dev/py-filelock                                             |
-| flow-cli                  | 0.6.0     | MIT License                                                    | https://labs.google/fx/tools/flow                                                  |
 | flow-story-studio         | 1.8.3     | UNKNOWN                                                        | UNKNOWN                                                                            |
 | frozenlist                | 1.8.0     | Apache-2.0                                                     | https://github.com/aio-libs/frozenlist                                             |
-| gflow-cli                 | 0.68.0    | MIT License                                                    | https://github.com/ffroliva/gflow-cli                                              |
 | greenlet                  | 3.5.5     | MIT AND PSF-2.0                                                | https://greenlet.readthedocs.io                                                    |
 | h11                       | 0.16.0    | MIT License                                                    | https://github.com/python-hyper/h11                                                |
 | httpcore                  | 1.0.9     | BSD-3-Clause                                                   | https://www.encode.io/httpcore/                                                    |

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from flow_story_studio.flow_media import (
+from flow_story_studio.media_tools import (
     VisualFrames,
     extract_last_frame,
     extract_qc_frames,
@@ -16,7 +16,7 @@ from flow_story_studio.flow_media import (
 
 class TestFfmpegPath:
     def test_ffmpeg_path_returns_none_when_not_found(self) -> None:
-        with patch("flow_story_studio.flow_media.shutil.which", return_value=None):
+        with patch("flow_story_studio.media_tools.shutil.which", return_value=None):
             with patch.object(Path, "is_file", return_value=False):
                 result = ffmpeg_path()
                 assert result is None
@@ -24,7 +24,7 @@ class TestFfmpegPath:
     def test_ffmpeg_path_finds_system_ffmpeg(self) -> None:
         ffmpeg_path_str = "C:\\ffmpeg\\bin\\ffmpeg.exe"
         with patch(
-            "flow_story_studio.flow_media.shutil.which", return_value=ffmpeg_path_str
+            "flow_story_studio.media_tools.shutil.which", return_value=ffmpeg_path_str
         ):
             result = ffmpeg_path()
             assert result == ffmpeg_path_str
@@ -47,7 +47,7 @@ class TestVisualFrames:
 class TestExtractLastFrame:
     @pytest.mark.asyncio
     async def test_extract_last_frame_no_ffmpeg(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value=None):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value=None):
             result = await extract_last_frame(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )
@@ -55,7 +55,7 @@ class TestExtractLastFrame:
 
     @pytest.mark.asyncio
     async def test_extract_last_frame_video_not_file(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value="ffmpeg"):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value="ffmpeg"):
             result = await extract_last_frame(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )
@@ -65,7 +65,7 @@ class TestExtractLastFrame:
 class TestExtractQcFrames:
     @pytest.mark.asyncio
     async def test_extract_qc_frames_no_ffmpeg(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value=None):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value=None):
             result = await extract_qc_frames(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )
@@ -73,7 +73,7 @@ class TestExtractQcFrames:
 
     @pytest.mark.asyncio
     async def test_extract_qc_frames_video_not_file(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value="ffmpeg"):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value="ffmpeg"):
             result = await extract_qc_frames(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )
@@ -83,7 +83,7 @@ class TestExtractQcFrames:
 class TestExtractVisualFrames:
     @pytest.mark.asyncio
     async def test_extract_visual_frames_no_ffmpeg(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value=None):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value=None):
             result = await extract_visual_frames(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )
@@ -91,7 +91,7 @@ class TestExtractVisualFrames:
 
     @pytest.mark.asyncio
     async def test_extract_visual_frames_video_not_file(self, tmp_path: Path) -> None:
-        with patch("flow_story_studio.flow_media.ffmpeg_path", return_value="ffmpeg"):
+        with patch("flow_story_studio.media_tools.ffmpeg_path", return_value="ffmpeg"):
             result = await extract_visual_frames(
                 tmp_path, "project-1", "scene-1", tmp_path / "video.mp4"
             )

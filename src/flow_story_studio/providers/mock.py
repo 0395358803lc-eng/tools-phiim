@@ -1,4 +1,4 @@
-"""Deterministic demo provider used when Google Flow is not configured."""
+"""Deterministic demo provider used for local tests and demonstrations."""
 
 from __future__ import annotations
 

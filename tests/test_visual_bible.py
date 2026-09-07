@@ -53,7 +53,7 @@ def test_visual_bible_contains_canonical_entity_locks_and_scene_plans() -> None:
         assert scene.visual_plan.location_reference_id.startswith("VIS-")
 
     assert project.scenes[0].visual_plan.dependency_mode == "opening"
-    assert "VISUAL BIBLE LOCKS:" in project.scenes[0].flow_prompt
+    assert "VISUAL BIBLE LOCKS:" in project.scenes[0].render_prompt
 
 
 def test_visual_plan_uses_direct_only_for_actual_direct_continuation() -> None:
@@ -101,9 +101,44 @@ def test_schema_v2_migrates_visual_bible_defaults() -> None:
         scene.pop("visual_plan", None)
 
     migrated = migrate_project_payload(payload)
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 5
     assert migrated["visual_bible"] == {"version": 1, "references": []}
     assert all("visual_plan" in scene for scene in migrated["scenes"])
     assert all("visual_qc" in scene for scene in migrated["scenes"])
     assert all("continuity_qc" in scene for scene in migrated["scenes"])
     assert all("acceptance" in scene for scene in migrated["scenes"])
+
+
+
+def test_location_master_lock_strips_scene_weather_time_and_light_state() -> None:
+    from flow_story_studio.models import Location
+    from flow_story_studio.visual_bible import canonical_location_lock
+
+    location = Location(
+        id="LOC_001",
+        name="Apartment",
+        place_type="Compact apartment",
+        architecture="Modest intact apartment",
+        space="Dining table near window; short route to entrance door",
+        interior="Dining table and rain window are fixed anchors",
+        objects=[
+            "rain-facing window",
+            "low-output ceiling LED",
+            "entrance door",
+        ],
+        lighting="Rainy night, cold blue ambient, low-output LED",
+        time_of_day="23:17",
+        weather="Light rain",
+        spatial_anchors="table ↔ rain window ↔ entrance door at 23:17",
+    )
+
+    lock = canonical_location_lock(location)
+
+    assert "rain-facing" not in lock.casefold()
+    assert "rain window" not in lock.casefold()
+    assert "23:17" not in lock
+    assert "low-output" not in lock.casefold()
+    assert "window" in lock.casefold()
+    assert "ceiling led" in lock.casefold()
+    assert "entrance door" in lock.casefold()
+    assert "CANONICAL BASELINE EXCLUDES" in lock

@@ -15,9 +15,10 @@ class RenderResult:
     result_file: str = ""
     last_frame_file: str = ""
     upstream_project_id: str = ""
+    upstream_media_id: str = ""
+    upstream_resource_name: str = ""
 
 
 class VideoProvider(Protocol):
     async def health(self) -> dict[str, object]: ...
-
     async def generate(self, project: Project, scene: Scene) -> RenderResult: ...

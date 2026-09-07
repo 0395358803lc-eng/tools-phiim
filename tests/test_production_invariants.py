@@ -134,7 +134,7 @@ def test_merge_enforces_canonical_visual_and_prop_invariants() -> None:
     assert set(office.start_state.prop_positions) == {notebook.id}
     assert set(office.end_state.prop_positions) == {notebook.id}
 
-    assert len({scene.flow_prompt for scene in project.scenes}) == len(project.scenes)
+    assert len({scene.render_prompt for scene in project.scenes}) == len(project.scenes)
 
 
 def test_deterministic_analyzer_does_not_seed_every_prop_into_every_scene() -> None:
@@ -266,5 +266,5 @@ Alex stands alone by the exit and tears the ticket in half. Maya is not there.
     assert "maya" not in final_scene.start_state.camera.casefold()
     assert "maya" not in final_scene.start_state.notes.casefold()
     assert final_scene.visual_plan.dependency_mode == "canonical"
-    assert "Canonical cut/new beat" in final_scene.flow_prompt
-    assert "Direct continuation of" not in final_scene.flow_prompt
+    assert "Canonical cut/new beat" in final_scene.render_prompt
+    assert "Direct continuation of" not in final_scene.render_prompt
