@@ -7,7 +7,7 @@ from pathlib import Path
 from .models import Project, Scene, VisualReference
 from .production_gate import master_reference_qc_blockers
 from .providers.reference import ReferenceProvider
-from .visual_bible import canonical_reference_lock
+from .visual_bible import canonical_reference_lock, source_grounded_location_clues
 from .visual_qc import VisualQCAnalyzer
 
 
@@ -36,13 +36,9 @@ def resolve_scene_reference(project: Project, scene: Scene, data_root: Path) -> 
             return scene.reference_image
 
     refs = relevant_references(project, scene)
-    approved = [
-        item for item in refs
-        if item.status == "approved" and item.approved_reference
-    ]
+    approved = [item for item in refs if item.status == "approved" and item.approved_reference]
     anchored = [
-        item for item in approved
-        if item.source_scene_id == scene.visual_plan.anchor_scene_id
+        item for item in approved if item.source_scene_id == scene.visual_plan.anchor_scene_id
     ]
     ranked = anchored or sorted(
         approved,
@@ -85,11 +81,7 @@ _GENERIC_LOCATION_MARKERS = (
 
 def _location_needs_source_context(project: Project, reference: VisualReference) -> bool:
     location = next(
-        (
-            item
-            for item in getattr(project, "locations", [])
-            if item.id == reference.entity_id
-        ),
+        (item for item in getattr(project, "locations", []) if item.id == reference.entity_id),
         None,
     )
     if location is None:
@@ -100,8 +92,7 @@ def _location_needs_source_context(project: Project, reference: VisualReference)
         str(location.interior or "").casefold(),
     )
     generic_hits = sum(
-        any(marker in field for marker in _GENERIC_LOCATION_MARKERS)
-        for field in fields
+        any(marker in field for marker in _GENERIC_LOCATION_MARKERS) for field in fields
     )
     has_specific_objects = bool(location.objects)
     anchors = str(location.spatial_anchors or "").casefold()
@@ -109,35 +100,35 @@ def _location_needs_source_context(project: Project, reference: VisualReference)
     return generic_hits >= 2 and not has_specific_objects and generic_anchor
 
 
+def _source_grounded_location_clues(
+    project: Project,
+    reference: VisualReference,
+) -> list[str]:
+    """Compatibility wrapper around the shared canonical structural-clue extractor."""
+    return source_grounded_location_clues(project, reference)
+
+
 def _location_scene_context(project: Project, reference: VisualReference) -> str:
     if reference.entity_type != "location":
         return ""
     if not _location_needs_source_context(project, reference):
         return ""
-    scenes = [
-        scene
-        for scene in project.scenes
-        if scene.location_id == reference.entity_id
-    ]
-    if not scenes:
-        return ""
-    parts = [
-        f"{scene.id} STRUCTURAL SOURCE EVIDENCE ONLY:\n{scene.source_text[:900]}"
-        for scene in scenes
-    ]
+    clues = _source_grounded_location_clues(project, reference)
+    if not clues:
+        return (
+            "STRUCTURAL SOURCE FALLBACK:\n"
+            "The screenplay provides no additional safe fixed clue beyond the location name. "
+            "Use only the locked location type and neutral canonical architecture. Do NOT infer "
+            "story props, people, readable signs, weather, time-of-day or lighting state."
+        )
+    bullets = "\n".join(f"- {item}" for item in clues)
     return (
-        "SOURCE SCENES ARE EVIDENCE ONLY BECAUSE THIS LOCATION BIBLE IS TOO GENERIC:\n"
-        + "\n".join(parts)
-        + "\nHARD MASTER EXTRACTION RULE:\n"
-        "Extract ONLY fixed architecture, layout, built-ins, fixed furniture/equipment, "
-        "windows/doors, material junctions and repeatable spatial anchors. NEVER canonicalize "
-        "weather, precipitation, time-of-day, darkness/brightness, color cast, lamp/LED on-off "
-        "state, light intensity/spill, people, actions, handheld props, temporary clutter or "
-        "readable screen/sign content, EVEN IF every supplied scene happens to share that same "
-        "temporary state. Scene recurrence does not make a transient state canonical. "
-        "When source names a defining fixed feature such as a CCTV monitor wall, ticket counter, "
-        "elevator bank or door/window relationship, preserve the physical feature but not its "
-        "display content or temporary light state."
+        "SOURCE-GROUNDED STRUCTURAL CLUES ONLY:\n"
+        f"{bullets}\n"
+        "These clues were extracted deterministically from source evidence. They are the ONLY "
+        "extra scene-derived facts allowed in this Location Master. Do NOT copy screenplay "
+        "characters, actions, handheld/loose props, readable text, weather, time-of-day, "
+        "temporary clutter or fixture on/off/color/intensity state into the image."
     )
 
 
@@ -164,9 +155,7 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
         "age_mismatch": (
             "Correct the apparent age to the locked specification while keeping anatomy natural."
         ),
-        "hair_mismatch": (
-            "Correct hairstyle, length and color to the locked specification."
-        ),
+        "hair_mismatch": ("Correct hairstyle, length and color to the locked specification."),
         "wardrobe_mismatch": (
             "Use the exact locked garment types, layers and colors. Do not substitute a T-shirt "
             "for a shirt or redesign a simple jacket into a different outerwear style."
@@ -184,14 +173,28 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
             "identity. Keep the reference visually clean and inspection-friendly."
         ),
         "scene_specific_lighting": (
-            "Replace dramatic or story-specific lighting with neutral inspection lighting that "
-            "reveals canonical identity without imposing a scene mood."
+            "Replace dramatic or story-specific lighting with flat neutral inspection exposure. "
+            "Do not encode night/day, colored cast, motivated key/rim light, fixture glow, "
+            "window weather light or cinematic grading into the Master."
+        ),
+        "transient_state_control": (
+            "Reset the Location Master to a neutral canonical baseline: no weather, "
+            "no time-of-day look, no readable displays, no loose story props, and no "
+            "temporary fixture/light state."
         ),
         "lighting_mood": (
             "Remove strong cinematic color grading and mood lighting from the Master baseline."
         ),
-        "action_pose": (
-            "Use a calm neutral reference pose/expression with no narrative action."
+        "action_pose": ("Use a calm neutral reference pose/expression with no narrative action."),
+        "incomplete_full_body": (
+            "Regenerate a true head-to-toe full-body character Master. Keep the entire head, "
+            "body, both legs and both feet fully visible with clean margin around the silhouette; "
+            "do not crop at the waist, thighs, knees, ankles or shoes."
+        ),
+        "framing_mismatch": (
+            "Use the standard character-Master framing: eye-level, front-facing, full-body "
+            "head-to-toe, both feet visible, centered subject, and consistent camera distance "
+            "with the other canonical character Masters."
         ),
         "missing_specific_signature": (
             "Add distinctive non-textual, non-branded identity cues using only stable physical "
@@ -202,8 +205,13 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
             "relative positions unambiguous for later continuity matching."
         ),
         "missing_spatial_anchor": (
-            "Restore the source-named fixed spatial anchor and show its relationship to the other "
-            "canonical anchors clearly."
+            "Restore every source-named fixed spatial anchor with unmistakable geometry and show "
+            "its relative position to the other canonical anchors. For an entry threshold, make "
+            "the door leaf, frame and floor threshold clearly readable at the Location-Master "
+            "scale. Micro-details needed only for a close-up interaction, such as a small "
+            "under-door gap used by a sliding ticket, belong to Scene Images and must not be "
+            "required as a wide Location-Master visibility condition. Do not add unsourced "
+            "furniture to make an anchor look plausible."
         ),
         "layout_mismatch": (
             "Rebuild the location from source-grounded architecture and relative anchor positions; "
@@ -214,19 +222,17 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
             "state. Preserve only the fixed architecture behind it."
         ),
         "transient_story_prop": (
-            "Remove tickets, phones, recorders, cups and other scene-action props from the "
-            "location Master unless explicitly part of fixed canonical identity."
+            "Remove all movable scene-level content from the Location Master: tickets, phones, "
+            "recorders, cups, papers, bags, trains, vehicles, carts, trolleys and other rolling "
+            "stock. Preserve only fixed architecture, built-ins, stable furniture/equipment and "
+            "source-named spatial anchors."
         ),
-        "people_present": (
-            "Remove all people from the location Master."
-        ),
+        "people_present": ("Remove all people from the location Master."),
         "readable_text": (
             "Remove readable signage, labels and display content unless the locked specification "
             "explicitly requires exact text."
         ),
-        "logo_or_brand": (
-            "Remove unrequested logos, brand marks and product labels."
-        ),
+        "logo_or_brand": ("Remove unrequested logos, brand marks and product labels."),
         "contamination": (
             "Remove transient loose clutter, consumables and action props that are not part of "
             "the locked identity. For a location, clear tableware, bowls, cups, papers and other "
@@ -236,15 +242,11 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
             "Normalize unsupported wear, patina, damage or temporary state on fixed objects. "
             "Preserve such state only when the locked specification explicitly requires it."
         ),
-        "shape_mismatch": (
-            "Correct the prop silhouette and geometry to the locked specification."
-        ),
+        "shape_mismatch": ("Correct the prop silhouette and geometry to the locked specification."),
         "material_mismatch": (
             "Correct the prop material and surface response to the locked specification."
         ),
-        "color_mismatch": (
-            "Correct the prop's canonical color without changing form or material."
-        ),
+        "color_mismatch": ("Correct the prop's canonical color without changing form or material."),
         "state_mismatch": (
             "Return the prop to its locked baseline physical state; scene-specific transformations "
             "must be applied later by scene logic."
@@ -268,14 +270,12 @@ def _safe_corrective_instruction(reference: VisualReference, issue_code: str) ->
         )
     if reference.entity_type == "location":
         return (
-            instruction
-            + " Prefer architecture, fixed furniture, windows, doors, built-ins "
+            instruction + " Prefer architecture, fixed furniture, windows, doors, built-ins "
             "and material junctions."
         )
     if reference.entity_type == "prop":
         return (
-            instruction
-            + " Keep form, material, scale, condition and distinctive geometry stable."
+            instruction + " Keep form, material, scale, condition and distinctive geometry stable."
         )
     return instruction
 
@@ -331,8 +331,12 @@ def _generation_prompt(project: Project, reference: VisualReference) -> str:
             "The image exists only to lock identity for reuse across many different locations. "
             "Use a seamless plain neutral-gray studio backdrop, soft diffuse near-neutral white "
             "inspection lighting, eye-level camera, natural standing posture and calm neutral "
-            "expression. Show face, hair, body proportions and the complete locked wardrobe "
-            "clearly. NO alley, station, apartment, rain, weather, bokeh scenery, dramatic rim "
+            "expression. STRICT FULL-BODY FRAMING: show the subject head-to-toe with the entire "
+            "head, both legs and both feet/shoes fully visible, centered, with clean margin above "
+            "the head and below the feet. Never crop at the waist, thighs, knees, ankles or shoes. "
+            "Use the same repeatable camera distance/framing template for every character Master. "
+            "Show face, hair, body proportions and the complete locked wardrobe clearly. "
+            "NO alley, station, apartment, rain, weather, bokeh scenery, dramatic rim "
             "light, colored cinematic grading, story action, handheld story props or "
             "scene-specific pose. "
             "Only wearable items explicitly required by the LOCKED SPECIFICATION may appear. "
@@ -341,17 +345,31 @@ def _generation_prompt(project: Project, reference: VisualReference) -> str:
             "Do not infer ethnicity, nationality or identity details beyond source truth."
         ),
         "location": (
-            "Create one canonical cinematic environment reference with stable "
-            "architecture and layout. This is a MASTER REFERENCE for visual inspection: "
-            "use balanced, readable exposure and enough fill light to clearly reveal "
-            "walls, flooring, furniture, materials, color palette and spatial layout. "
-            "Use a repeatable neutral dry baseline with no visible weather effects, crowds, "
-            "event dressing or dramatic time-of-day treatment unless the LOCKED SPECIFICATION "
-            "explicitly defines such a condition as permanent architecture. "
-            "Treat scene-specific weather, darkness and atmosphere as transient context rather "
-            "than canonical location identity. Preserve structural lighting fixtures and the "
-            "intended architectural mood without crushing shadows or hiding identity-defining "
-            "environment details."
+            "Create one canonical LOCATION MASTER inspection plate, NOT a cinematic scene. "
+            "Lock stable architecture, layout, built-ins, stable furniture/equipment, material "
+            "junctions and every source-named spatial anchor. Use a wide readable 16:9 composition "
+            "that shows the source-named anchors and their relative geometry in one view whenever "
+            "physically possible; do not invent extra anchors merely to decorate the space. "
+            "LIGHTING MUST BE NEUTRAL INSPECTION EXPOSURE: broad even near-white fill "
+            "with readable walls, floor, ceiling, furniture and materials. No night/day look, "
+            "no dramatic shadows, no colored cast, no motivated key/rim light, no fixture glow "
+            "emphasis and no cinematic color grade. Structural light fixtures may remain "
+            "physically visible but MUST be OFF/unlit in the Master; illuminate the environment "
+            "only with "
+            "neutral non-diegetic inspection fill so fixture on/off/intensity/color is never baked "
+            "into canonical identity. Windows and "
+            "exterior openings may remain as fixed anchors, but any exterior beyond them must be "
+            "soft neutral/featureless and must not encode cityscape brightness, sky color, weather "
+            "or time-of-day. Use a neutral dry baseline with no weather, fog, crowds or event "
+            "dressing. ABSOLUTELY NO people, trains, vehicles, carts, trolleys or other rolling "
+            "stock, and no loose story objects such as tickets, phones, recorders, cups, papers, "
+            "bags, clothing or temporary clutter. Include only stable furniture/equipment named by "
+            "the LOCKED SPECIFICATION or source-grounded structural clues; omit unsourced benches, "
+            "stools, chairs and decorative furniture that could become false continuity anchors. "
+            "No readable text, "
+            "numbers, labels, brands or screen content anywhere; signs/displays must be blank or "
+            "unreadable unless exact text is explicitly locked. This image is an identity map for "
+            "future scenes, not a storytelling frame."
         ),
         "prop": (
             "Create one canonical isolated PROP MASTER on a plain neutral background. "
@@ -381,18 +399,35 @@ def _generation_prompt(project: Project, reference: VisualReference) -> str:
         ),
     }.get(reference.entity_type, "No unrequested logos, brands or readable text.")
     context = _location_scene_context(project, reference)
+    style_section = (
+        "STYLE REFERENCE FOR MATERIAL REALISM ONLY: "
+        f"{visual_style} "
+        "For a Location Master, do NOT apply scene mood, cinematic lighting, time-of-day "
+        "or color grading from this style text."
+        if reference.entity_type == "location"
+        else f"FILM STYLE: {visual_style}"
+    )
     sections = [
         purpose,
         f"LOCKED SPECIFICATION:\n{reference.lock_text}",
-        f"FILM STYLE: {visual_style}",
+        style_section,
         f"PRODUCTION-SAFE CONSTRAINTS: {neutralization}",
     ]
     if context:
         sections.append(context)
     if reference.status == "rejected" and reference.vision_issues:
+        actionable_codes: list[str] = []
+        seen_codes: set[str] = set()
+        for issue in reference.vision_issues:
+            code = str(issue.code or "").strip()
+            normalized = code.casefold()
+            if not code or normalized.startswith("master_") or normalized in seen_codes:
+                continue
+            seen_codes.add(normalized)
+            actionable_codes.append(code)
         corrections = "\n".join(
-            f"- {issue.code}: {_safe_corrective_instruction(reference, issue.code)}"
-            for issue in reference.vision_issues
+            f"- {code}: {_safe_corrective_instruction(reference, code)}"
+            for code in actionable_codes
         )
         sections.append(
             "CORRECTIVE REGENERATION REQUIREMENTS:\n"
@@ -403,14 +438,13 @@ def _generation_prompt(project: Project, reference: VisualReference) -> str:
             "or identity drift.\n"
             f"{corrections}"
         )
-    sections.append(
-        "Preserve production identity. Do not improvise identity-changing details."
-    )
+    sections.append("Preserve production identity. Do not improvise identity-changing details.")
     return "\n".join(sections)
 
 
 class ReferenceManager:
     """Generate, vision-QC, approve and resolve canonical visual references."""
+
     def __init__(
         self,
         provider: ReferenceProvider | None,
@@ -455,13 +489,10 @@ class ReferenceManager:
         was_rejected = reference.status == "rejected"
         correction_anchor: Path | None = None
         correction_anchor_relative = ""
-        can_reuse_existing = (
-            reference.status == "candidate"
-            or (
-                reference.status == "rejected"
-                and bool(reference.vision_model)
-                and reference.vision_model != project.settings.vision_model
-            )
+        can_reuse_existing = reference.status == "candidate" or (
+            reference.status == "rejected"
+            and bool(reference.vision_model)
+            and reference.vision_model != project.settings.vision_model
         )
         if reference.reference_images:
             for relative in reversed(reference.reference_images):
@@ -578,12 +609,12 @@ class ReferenceManager:
             return True
 
         vision_unavailable = any(
-            issue.code == "VISION_UNAVAILABLE" and issue.severity == "error"
-            for issue in issues
+            issue.code == "VISION_UNAVAILABLE" and issue.severity == "error" for issue in issues
         )
         reference.status = "candidate" if vision_unavailable else "rejected"
         reference.approved_reference = ""
         return False
+
     async def ensure_scene_references(
         self,
         project: Project,
@@ -592,10 +623,7 @@ class ReferenceManager:
         references = relevant_references(project, scene)
         if not references:
             return True
-        results = [
-            await self.ensure_reference(project, reference)
-            for reference in references
-        ]
+        results = [await self.ensure_reference(project, reference) for reference in references]
         return all(results)
 
     def resolve_scene_reference(self, project: Project, scene: Scene) -> str:

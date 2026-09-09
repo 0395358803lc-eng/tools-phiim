@@ -101,13 +101,12 @@ def test_schema_v2_migrates_visual_bible_defaults() -> None:
         scene.pop("visual_plan", None)
 
     migrated = migrate_project_payload(payload)
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 8
     assert migrated["visual_bible"] == {"version": 1, "references": []}
     assert all("visual_plan" in scene for scene in migrated["scenes"])
     assert all("visual_qc" in scene for scene in migrated["scenes"])
     assert all("continuity_qc" in scene for scene in migrated["scenes"])
     assert all("acceptance" in scene for scene in migrated["scenes"])
-
 
 
 def test_location_master_lock_strips_scene_weather_time_and_light_state() -> None:

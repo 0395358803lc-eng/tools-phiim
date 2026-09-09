@@ -12,7 +12,14 @@ import unicodedata
 from difflib import SequenceMatcher
 
 from ..engines.analyzer import _declared_characters, _declared_props, _heading_locations
-from ..models import Character, Location, Project, Prop, Scene
+from ..engines.continuity import is_direct_frame_anchor
+from ..models import Character, Location, Project, Prop, PropPhysicalState, Scene
+from .source_truth import (
+    audit_ai_semantic_proposal,
+    compile_scene_semantic_truth,
+    legacy_prop_state,
+    physical_source_text,
+)
 
 _OFFSCREEN_PHRASES = (
     "v.o.",
@@ -449,7 +456,7 @@ def _prop_negated(source_text: str, prop_name: str) -> bool:
 
 
 def _physical_source_text(scene: Scene) -> str:
-    text = _strip_scene_context(scene.source_text)
+    text = physical_source_text(scene)
     # Dialogue content may mention a prop that is elsewhere. Remove the exact spoken
     # payload before deciding physical presence; source action text remains authoritative.
     for dialogue in scene.dialogues:
@@ -523,13 +530,17 @@ def _prop_source_state(scene: Scene, prop: Prop) -> str:
         and ("ve" in source or "ticket" in source)
         and ("ve" in name_key or "ticket" in name_key)
     ):
+        if any(marker in source for marker in ("manh goc", "corner fragment", "fragment")):
+            return (
+                f"Source state: right-corner fragment of {prop.name} is physically present; "
+                "do not restore the complete ticket"
+            )
         return (
-            f"Source state: right-corner fragment of {prop.name} is physically present; "
-            "do not restore the complete ticket"
+            f"Source state: full {prop.name} is physically present with its right corner missing; "
+            "do not restore the missing corner"
         )
-    transformed = _prop_transformed_state(scene, prop)
-    if transformed:
-        return transformed
+    # Transformations happen during the beat and therefore belong to end_state.
+    # start_state must represent the physical state immediately before the action.
     return f"Present in source beat: {prop.name}; canonical source state: {prop.state}"
 
 
@@ -582,9 +593,7 @@ def _ground_prop_color_in_text(text: str, prop: Prop) -> str:
         pattern = re.escape(alias).replace(r"\ ", r"\s+")
         alias_spans.extend(
             (match.start(), match.end())
-            for match in re.finditer(
-                rf"(?<!\w){pattern}(?!\w)", text, re.IGNORECASE | re.UNICODE
-            )
+            for match in re.finditer(rf"(?<!\w){pattern}(?!\w)", text, re.IGNORECASE | re.UNICODE)
         )
     if not alias_spans:
         return text
@@ -594,8 +603,7 @@ def _ground_prop_color_in_text(text: str, prop: Prop) -> str:
         if _color_identity(match.group(0)) == canonical_color:
             continue
         nearby = any(
-            0 <= match.start() - alias_end <= 32
-            for _alias_start, alias_end in alias_spans
+            0 <= match.start() - alias_end <= 32 for _alias_start, alias_end in alias_spans
         )
         if nearby:
             replacements.append((match.start(), match.end()))
@@ -733,14 +741,54 @@ def normalize_semantic_scene(
     characters: list[Character],
     props: list[Prop],
     previous_scene: Scene | None,
+    prior_props: dict[str, PropPhysicalState] | None = None,
 ) -> None:
     scene.characters = character_presence(scene, characters)
+    onscreen_speakers = [
+        item.character_id for item in scene.dialogues if item.delivery == "onscreen"
+    ]
+    scene.characters = list(dict.fromkeys([*scene.characters, *onscreen_speakers]))
     ground_canonical_prop_appearance(scene, props)
     direct = _is_direct_continuation(previous_scene, scene)
-    previous_props = previous_scene.end_state.prop_positions if previous_scene and direct else {}
-    start_props, end_props = safe_prop_states(
-        scene, props, previous_props, direct_continuation=direct
+    scene.semantic_truth = compile_scene_semantic_truth(
+        scene,
+        characters=characters,
+        props=props,
+        previous_scene=previous_scene,
+        direct_continuation=direct,
+        prior_props=prior_props,
     )
+    audit_ai_semantic_proposal(scene)
+    prop_names = {item.id: item.name for item in props}
+    start_props = {
+        prop_id: f"{prop_names.get(prop_id, prop_id)}; {legacy_prop_state(state)}"
+        for prop_id, state in scene.semantic_truth.entry_props.items()
+    }
+    end_props = {
+        prop_id: f"{prop_names.get(prop_id, prop_id)}; {legacy_prop_state(state)}"
+        for prop_id, state in scene.semantic_truth.exit_props.items()
+    }
+
+    def merge_part_instances(
+        target: dict[str, str],
+        instances: dict[str, PropPhysicalState],
+    ) -> None:
+        by_entity: dict[str, list[str]] = {}
+        for instance_id, part_state in instances.items():
+            by_entity.setdefault(part_state.entity_id, []).append(
+                f"instance={instance_id}; {legacy_prop_state(part_state)}"
+            )
+        for entity_id, descriptions in by_entity.items():
+            prefix = target.get(
+                entity_id,
+                f"{prop_names.get(entity_id, entity_id)}; canonical whole not physically present",
+            )
+            target[entity_id] = (
+                prefix + " | additional physical instances: " + " || ".join(descriptions)
+            )
+
+    merge_part_instances(start_props, scene.semantic_truth.entry_part_instances)
+    merge_part_instances(end_props, scene.semantic_truth.exit_part_instances)
     visible_ids = set(scene.characters)
     character_by_id = {item.id: item for item in characters}
     for state_index, state in enumerate((scene.start_state, scene.end_state)):
@@ -765,4 +813,9 @@ def normalize_semantic_scene(
                     state.character_wardrobe[character_id] = character.clothing
     scene.start_state.prop_positions = dict(start_props)
     scene.end_state.prop_positions = dict(end_props)
+    scene.semantic_truth.frame_anchor = (
+        "previous_final_frame"
+        if is_direct_frame_anchor(previous_scene, scene)
+        else "canonical_master"
+    )
     scene.camera = camera_for_scene(scene, len(scene.characters))

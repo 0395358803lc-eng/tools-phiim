@@ -445,6 +445,7 @@ def test_xkiro_wraps_top_level_json_array_as_scenes() -> None:
 @pytest.mark.asyncio
 async def test_xkiro_key_is_encrypted_and_remembered(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("XKIRO_API_KEY", raising=False)
+    monkeypatch.setenv("TH_MEDIA_SECRET_KEY", "xkiro-vault-test-secret")
     credential_path = tmp_path / "shared-credentials" / "xkiro-api-key.bin"
     first = XKiroClient(transport=transport(), credential_path=credential_path)
 
@@ -741,7 +742,6 @@ def test_world_merge_prevents_semantic_id_hijack() -> None:
     assert merged["props"][1]["id"] == "PROP_002"
 
 
-
 @pytest.mark.asyncio
 async def test_vision_retries_same_selected_model_on_transient_server_error(
     tmp_path: Path,
@@ -800,3 +800,49 @@ async def test_vision_retries_same_selected_model_on_transient_server_error(
     assert model_id == "openai/test-paid"
     assert attempts == 3
     assert used_models == ["openai/test-paid", "openai/test-paid", "openai/test-paid"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_model_catalog_is_wrapped_as_xkiro_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=["unexpected", "array"])
+        return httpx.Response(404)
+
+    client = XKiroClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(XKiroError, match="Không thể tải catalog model"):
+        await client.list_models(free_only=False)
+
+
+def test_vision_settings_route_saves_valid_vision_model_without_500(tmp_path: Path) -> None:
+    from flow_story_studio.engines.analyzer import analyze_story
+
+    storage = ProjectStorage(tmp_path / "projects")
+    project = analyze_story(
+        AnalyzeRequest(
+            name="Vision settings regression",
+            original_text=TEXT,
+            settings=VideoSettings(analysis_provider="offline"),
+        )
+    )
+    storage.save(project)
+
+    client = XKiroClient(transport=transport())
+    app = create_app(storage, xkiro_client=client)
+    with TestClient(app) as test_client:
+        connected = test_client.post(
+            "/api/ai/xkiro/connect",
+            json={"api_key": "sk-xt-valid"},
+        )
+        assert connected.status_code == 200
+
+        response = test_client.patch(
+            f"/api/projects/{project.id}/vision-settings",
+            json={"vision_model": "openai/test-paid"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["settings"]["vision_model"] == "openai/test-paid"
+
+        saved = test_client.get(f"/api/projects/{project.id}")
+        assert saved.status_code == 200
+        assert saved.json()["settings"]["vision_model"] == "openai/test-paid"

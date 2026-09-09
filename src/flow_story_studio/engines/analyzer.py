@@ -12,9 +12,6 @@ import uuid
 from collections import Counter
 from copy import deepcopy
 
-from ..analysis_providers.audio_finalization import finalize_audio
-from ..film import orchestrator as film_orchestrator
-from ..film.validation import assert_project_hard_constraints
 from ..models import (
     AnalyzeRequest,
     Character,
@@ -26,9 +23,6 @@ from ..models import (
     Scene,
     StoryBible,
 )
-from ..scene_contracts import seal_project_contracts
-from ..visual_bible import build_visual_bible
-from .continuity import check_project
 from .prompt_generator import global_visual_style, make_render_prompt, make_visual_prompt
 from .segmenter import (
     SCENE_CONTEXT_PREFIX,
@@ -243,6 +237,7 @@ def _declared_items(text: str, section_re: re.Pattern[str]) -> list[str]:
 def _declared_characters(text: str) -> list[str]:
     return _declared_items(text, CHARACTER_SECTION_RE)
 
+
 def _standalone_speakers(text: str) -> list[str]:
     """Recognize conventional screenplay dialogue labels such as JOHN or MARIA (V.O.)."""
     lines = re.sub(r"\r\n?", "\n", text).splitlines()
@@ -423,11 +418,7 @@ def _character_from_declared(index: int, name: str, details: str) -> Character:
     age_match = re.search(r"\b(\d{1,3})\s*(?:tuổi|years?\s+old)\b", details, re.IGNORECASE)
     age = f"{age_match.group(1)} tuổi" if age_match else "Không xác định"
 
-    fragments = [
-        item.strip().rstrip(".")
-        for item in re.split(r"[,;]", details)
-        if item.strip()
-    ]
+    fragments = [item.strip().rstrip(".") for item in re.split(r"[,;]", details) if item.strip()]
     clothing_markers = (
         "áo ",
         "quần ",
@@ -518,9 +509,7 @@ def _characters(text: str) -> list[Character]:
             gender = "Nữ"
 
         age_match = re.search(r"\b(\d{1,3})\s*(?:tuổi|years?\s*old|yo)\b", folded)
-        estimated_age = (
-            f"{age_match.group(1)} tuổi" if age_match else "Không xác định"
-        )
+        estimated_age = f"{age_match.group(1)} tuổi" if age_match else "Không xác định"
 
         authored_appearance = details
         authored_appearance = re.sub(
@@ -537,8 +526,7 @@ def _characters(text: str) -> list[Character]:
         )
         authored_appearance = authored_appearance.strip(" .,;")
         clothing = (
-            authored_appearance
-            or "Trang phục phù hợp bối cảnh, giữ nguyên cho đến khi có thay đổi"
+            authored_appearance or "Trang phục phù hợp bối cảnh, giữ nguyên cho đến khi có thay đổi"
         )
         hair_match = re.search(
             r"(?<!\w)(tóc\s+[^,.;]+)",
@@ -558,6 +546,7 @@ def _characters(text: str) -> list[Character]:
             )
         )
     return characters
+
 
 def _locations(text: str) -> list[Location]:
     lowered = text.lower()
@@ -621,6 +610,7 @@ def _props(text: str) -> list[Prop]:
             )
         )
     return props
+
 
 def _semantic_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value).casefold().replace("đ", "d"))
@@ -843,32 +833,9 @@ def analyze_story(request: AnalyzeRequest) -> Project:
         master_prompt=master_prompt,
         scenes=scenes,
     )
-    project = check_project(project, auto_fix=request.settings.auto_continuity)
-    project = finalize_audio(project)
-    project = film_orchestrator.prepare(project)
-    project = build_visual_bible(project)
-    location_by_id = {item.id: item for item in project.locations}
-    for index, scene in enumerate(project.scenes):
-        visible_characters = [item for item in project.characters if item.id in scene.characters]
-        scene.visual_prompt = make_visual_prompt(
-            action=scene.action,
-            characters=visible_characters,
-            location=location_by_id[scene.location_id],
-            camera=scene.camera,
-            lighting=scene.lighting,
-            atmosphere=scene.atmosphere,
-            style=project.visual_style,
-            start_state=scene.start_state,
-            end_state=scene.end_state,
-        )
-        scene.render_prompt = make_render_prompt(
-            scene,
-            characters=visible_characters,
-            location=location_by_id[scene.location_id],
-            visual_style=project.visual_style,
-            all_characters=project.characters,
-            previous_scene_id=project.scenes[index - 1].id if index else None,
-        )
-    project = film_orchestrator.finalize(project)
-    assert_project_hard_constraints(project)
-    return seal_project_contracts(project)
+    # All analysis providers must pass through the exact same deterministic finalizer.
+    # Import locally to avoid the analyzer/semantic-orchestrator module dependency cycle.
+    from ..analysis_providers.finalization import finalize_project
+
+    source_project = deepcopy(project)
+    return finalize_project(project, source_project=source_project)

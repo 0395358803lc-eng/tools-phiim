@@ -25,6 +25,8 @@ MASTER_BLOCKING_CODES: dict[str, set[str]] = {
         "scene_specific_lighting",
         "lighting_mood",
         "action_pose",
+        "incomplete_full_body",
+        "framing_mismatch",
         "transient_story_state",
         "readable_text",
         "logo_or_brand",
@@ -79,9 +81,7 @@ def master_reference_qc_blockers(
     threshold = master_reference_threshold(project, reference)
     reasons: list[str] = []
     if reference.vision_score < threshold:
-        reasons.append(
-            f"{reference.id} score {reference.vision_score} is below {threshold}"
-        )
+        reasons.append(f"{reference.id} score {reference.vision_score} is below {threshold}")
     if project.settings.vision_model and reference.vision_model != project.settings.vision_model:
         reasons.append(
             f"{reference.id} Vision model evidence is stale: "
@@ -127,6 +127,10 @@ def project_master_blockers(
     Scene image/video production must not start while this list is non-empty.
     """
     reasons: list[str] = []
+    if project.semantic_readiness.status != "Ready":
+        reasons.extend(
+            f"semantic readiness: {reason}" for reason in project.semantic_readiness.blockers
+        )
     for reference in project.visual_bible.references:
         reasons.extend(master_reference_blockers(project, reference, data_root=data_root))
     return reasons
@@ -195,9 +199,7 @@ def scene_production_blockers(
     if scene.acceptance.status != "Accepted":
         reasons.append(f"production acceptance is {scene.acceptance.status}")
     if scene.acceptance.score < threshold:
-        reasons.append(
-            f"production acceptance score {scene.acceptance.score} is below {threshold}"
-        )
+        reasons.append(f"production acceptance score {scene.acceptance.score} is below {threshold}")
     strict_floor = scene_production_score_floor(scene)
     if scene.acceptance.status == "Accepted" and scene.acceptance.score != strict_floor:
         reasons.append(
@@ -255,9 +257,7 @@ def scene_production_blockers(
         if not scene.audio_qc.audio_present:
             reasons.append("rendered scene audio stream is missing")
         if scene.audio_qc.score < threshold:
-            reasons.append(
-                f"audio QC score {scene.audio_qc.score} is below {threshold}"
-            )
+            reasons.append(f"audio QC score {scene.audio_qc.score} is below {threshold}")
         if scene.audio_qc.clipping_detected:
             reasons.append("audio true peak exceeds canonical limit")
         if not scene.audio_qc.model_id:
@@ -298,9 +298,7 @@ def scene_production_blockers(
         }
         continuity_low = _below_threshold(continuity_components, threshold)
         if continuity_low:
-            reasons.append(
-                "continuity component below threshold: " + ", ".join(continuity_low)
-            )
+            reasons.append("continuity component below threshold: " + ", ".join(continuity_low))
         if project.settings.provider != "mock" and not continuity.model_id:
             reasons.append("direct continuity QC model evidence is missing")
         if (

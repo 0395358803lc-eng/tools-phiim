@@ -110,6 +110,122 @@ class ContinuityState(StrictModel):
     notes: str = ""
 
 
+class PropPhysicalState(StrictModel):
+    entity_id: str
+    instance_id: str = ""
+    present: bool = True
+    part: Literal["whole", "right_corner_fragment", "fragment", "unknown"] = "whole"
+    owner_id: str = ""
+    location_id: str = ""
+    container: str = ""
+    condition: str = "intact"
+    piece_count: int = Field(default=1, ge=0)
+    visibility: Literal["visible", "offscreen", "unknown"] = "unknown"
+    scope: Literal[
+        "physical_world",
+        "cctv",
+        "screen",
+        "photo",
+        "mirror",
+        "phone_video",
+        "recording",
+        "memory",
+        "imagined",
+    ] = "physical_world"
+
+
+class PropEvent(StrictModel):
+    entity_id: str
+    action: Literal[
+        "appear",
+        "pick_up",
+        "place",
+        "take_out",
+        "put_away",
+        "transfer",
+        "tear",
+        "drop",
+        "destroy",
+        "move",
+        "inspect",
+        "activate",
+    ]
+    actor_id: str = ""
+    source_owner_id: str = ""
+    target_owner_id: str = ""
+    source_location: str = ""
+    target_location: str = ""
+    source_condition: str = ""
+    target_condition: str = ""
+    evidence: str = ""
+
+
+class AISemanticFact(StrictModel):
+    entity_id: str = ""
+    fact_type: Literal[
+        "presence",
+        "absence",
+        "ownership",
+        "location",
+        "condition",
+        "part",
+        "event",
+        "scope",
+        "time",
+    ]
+    value: str = ""
+    evidence: str = ""
+    confidence: int = Field(default=100, ge=0, le=100)
+
+
+class AISemanticProposal(StrictModel):
+    facts: list[AISemanticFact] = Field(default_factory=list)
+    negative_facts: list[AISemanticFact] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    rejected_facts: list[AISemanticFact] = Field(default_factory=list)
+    normalization_issues: list[str] = Field(default_factory=list)
+
+
+class SceneTemporalState(StrictModel):
+    timeline_branch: str = "main"
+    daypart: str = "source-defined time"
+    scene_clock: str = ""
+    diegetic_clock_observations: dict[str, str] = Field(default_factory=dict)
+
+
+class SceneSemanticTruth(StrictModel):
+    entry_props: dict[str, PropPhysicalState] = Field(default_factory=dict)
+    exit_props: dict[str, PropPhysicalState] = Field(default_factory=dict)
+    entry_part_instances: dict[str, PropPhysicalState] = Field(default_factory=dict)
+    exit_part_instances: dict[str, PropPhysicalState] = Field(default_factory=dict)
+    prop_events: list[PropEvent] = Field(default_factory=list)
+    temporal: SceneTemporalState = Field(default_factory=SceneTemporalState)
+    perceptual_entities: dict[str, str] = Field(default_factory=dict)
+    narrative_transition: Literal[
+        "opening",
+        "continuous",
+        "cut",
+        "location_transition",
+        "time_jump",
+        "flashback",
+        "return_from_flashback",
+        "parallel",
+        "montage",
+    ] = "cut"
+    frame_anchor: Literal[
+        "canonical_master",
+        "previous_final_frame",
+    ] = "canonical_master"
+    source_trace: dict[str, str] = Field(default_factory=dict)
+
+
+class SemanticReadinessReport(StrictModel):
+    status: Literal["Ready", "Blocked"] = "Blocked"
+    score: int = Field(default=0, ge=0, le=100)
+    blockers: list[str] = Field(default_factory=list)
+    dimensions: dict[str, int] = Field(default_factory=dict)
+
+
 class QualityReport(StrictModel):
     character: int = 100
     clothing: int = 100
@@ -290,6 +406,8 @@ class Scene(StrictModel):
     contract_version: int = 1
     contract_hash: str = ""
     orchestration: dict[str, object] = Field(default_factory=dict)
+    ai_semantic_proposal: AISemanticProposal = Field(default_factory=AISemanticProposal)
+    semantic_truth: SceneSemanticTruth = Field(default_factory=SceneSemanticTruth)
     render_contract: dict[str, object] = Field(default_factory=dict)
     render_contract_hash: str = ""
     accepted_end_state: ContinuityState | None = None
@@ -333,6 +451,7 @@ class Project(StrictModel):
     provider_project_id: str = ""
     film_model: dict[str, object] = Field(default_factory=dict)
     film_model_hash: str = ""
+    semantic_readiness: SemanticReadinessReport = Field(default_factory=SemanticReadinessReport)
     final_video: FinalVideo = Field(default_factory=FinalVideo)
 
 
@@ -413,5 +532,3 @@ class XKiroConnection(StrictModel):
     free_model_count: int = 0
     model_count: int = 0
     models: list[XKiroModel] = Field(default_factory=list)
-
-

@@ -22,7 +22,8 @@ NARRATIVE_SECTION = re.compile(
 )
 METADATA_LINE = re.compile(
     r"^(?:target\s*runtime|runtime|duration|genre|format|aspect\s*ratio|resolution|style|"
-    r"purpose|audience|thể\s*loại|thời\s*lượng(?:\s*dự\s*kiến|\s*mục\s*tiêu)?|"
+    r"purpose|audience|title|film\s*title|movie\s*title|tên\s*phim|tựa\s*phim|"
+    r"thể\s*loại|thời\s*lượng(?:\s*dự\s*kiến|\s*mục\s*tiêu)?|"
     r"bối\s*cảnh\s*chung|không\s*khí|tỷ\s*lệ|độ\s*phân\s*giải|"
     r"phong\s*cách\s*hình\s*ảnh|mục\s*tiêu)\s*:",
     re.IGNORECASE,
@@ -206,7 +207,9 @@ def narrative_text(text: str) -> str:
             continue
         plain_section_heading = bool(
             re.fullmatch(
-                r"(?:characters?|character bible|cast|props?|objects?|metadata|story bible)",
+                r"(?:characters?|character bible|cast|props?|objects?|metadata|story bible|"
+                r"nhân vật|nhan vat|đạo cụ|dao cu|vật thể|vat the|thông tin chung|"
+                r"thong tin chung|tổng quan|tong quan|ghi chú sản xuất|ghi chu san xuat)",
                 plain,
                 re.IGNORECASE,
             )

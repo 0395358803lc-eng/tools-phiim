@@ -1,4 +1,5 @@
 """Project-wide deterministic orchestration around AI scene enrichment."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -32,6 +33,8 @@ def prepare_project_orchestration(project: Project) -> Project:
         )
         scene.orchestration = {
             "transition_mode": mode.value,
+            "narrative_transition": scene.semantic_truth.narrative_transition,
+            "frame_anchor": scene.semantic_truth.frame_anchor,
             "narrative_goal": intent.narrative_goal,
             "required_characters": list(intent.required_characters),
             "required_props": list(intent.required_props),
@@ -58,14 +61,41 @@ def prepare_project_orchestration(project: Project) -> Project:
     film_model_payload = film_model.model_dump(mode="json")
     project.film_model_hash = stable_hash(film_model_payload)
     project.film_model = film_model_payload
-    project.film_model["scene_intents"] = [
-        item.model_dump(mode="json") for item in intents
-    ]
+    project.film_model["scene_intents"] = [item.model_dump(mode="json") for item in intents]
+    project.film_model["semantic_readiness"] = project.semantic_readiness.model_dump(mode="json")
     project.film_model["state_history"] = [
         {
             "scene_id": scene.id,
             "entry": scene.start_state.model_dump(mode="json"),
             "exit": scene.end_state.model_dump(mode="json"),
+        }
+        for scene in project.scenes
+    ]
+    project.film_model["semantic_state_ledger"] = [
+        {
+            "scene_id": scene.id,
+            "narrative_transition": scene.semantic_truth.narrative_transition,
+            "frame_anchor": scene.semantic_truth.frame_anchor,
+            "temporal": scene.semantic_truth.temporal.model_dump(mode="json"),
+            "entry_props": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.entry_props.items()
+            },
+            "entry_part_instances": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.entry_part_instances.items()
+            },
+            "prop_events": [
+                event.model_dump(mode="json") for event in scene.semantic_truth.prop_events
+            ],
+            "exit_props": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.exit_props.items()
+            },
+            "exit_part_instances": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.exit_part_instances.items()
+            },
         }
         for scene in project.scenes
     ]
@@ -91,14 +121,13 @@ def finalize_project_orchestration(project: Project) -> Project:
     film_model_payload = film_model.model_dump(mode="json")
     project.film_model_hash = stable_hash(film_model_payload)
     project.film_model = film_model_payload
-    project.film_model["scene_intents"] = [
-        item.model_dump(mode="json") for item in intents
-    ]
+    project.film_model["scene_intents"] = [item.model_dump(mode="json") for item in intents]
     project.film_model["hard_gate"] = {
         "passed": verdict.is_valid,
         "errors": list(verdict.errors),
         "warnings": list(verdict.warnings),
     }
+    project.film_model["semantic_readiness"] = project.semantic_readiness.model_dump(mode="json")
     project.film_model["state_history"] = [
         {
             "scene_id": scene.id,
@@ -108,11 +137,36 @@ def finalize_project_orchestration(project: Project) -> Project:
         }
         for scene in project.scenes
     ]
+    project.film_model["semantic_state_ledger"] = [
+        {
+            "scene_id": scene.id,
+            "narrative_transition": scene.semantic_truth.narrative_transition,
+            "frame_anchor": scene.semantic_truth.frame_anchor,
+            "temporal": scene.semantic_truth.temporal.model_dump(mode="json"),
+            "entry_props": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.entry_props.items()
+            },
+            "entry_part_instances": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.entry_part_instances.items()
+            },
+            "prop_events": [
+                event.model_dump(mode="json") for event in scene.semantic_truth.prop_events
+            ],
+            "exit_props": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.exit_props.items()
+            },
+            "exit_part_instances": {
+                key: value.model_dump(mode="json")
+                for key, value in scene.semantic_truth.exit_part_instances.items()
+            },
+        }
+        for scene in project.scenes
+    ]
     if not verdict.is_valid:
-        raise ValueError(
-            "Film hard-constraint validation failed: "
-            + "; ".join(verdict.errors)
-        )
+        raise ValueError("Film hard-constraint validation failed: " + "; ".join(verdict.errors))
     return project
 
 

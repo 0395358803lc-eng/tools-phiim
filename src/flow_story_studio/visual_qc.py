@@ -27,12 +27,106 @@ def _bounded(value: object, default: int = 0) -> int:
     return max(0, min(100, number))
 
 
-def _looks_like_positive_non_issue(message: str) -> bool:
+def _looks_like_positive_non_issue(message: str, *, code: str = "") -> bool:
     text = " ".join(message.casefold().split())
+    issue_code = str(code or "").casefold()
     if not text:
         return False
+
+    hard_defect_markers = (
+        "not clearly visible",
+        "not visible",
+        "is missing",
+        "are missing",
+        "must be removed",
+        "must remove",
+        "must be stripped",
+        "must strip",
+        "requires cleanup",
+        "does not satisfy",
+        "fails to",
+        "incorrect",
+        "wrong ",
+        "conflict",
+        "mismatch",
+    )
+
+    if issue_code == "missing_spatial_anchor":
+        if (
+            "no additional anchors are required" in text
+            or "image satisfies this" in text
+            or "locked spec only names" in text
+            or "locked specification only names" in text
+            or "acceptable as ordinary fixed fixture" in text
+            or "acceptable as ordinary fixed fixtures" in text
+            or "acceptable as a fixed fixture" in text
+        ) and not any(marker in text for marker in hard_defect_markers):
+            return True
+
+    if issue_code == "layout_mismatch":
+        if (
+            "is acceptable" in text
+            or "are acceptable" in text
+            or "acceptable since" in text
+            or "no layout conflict" in text
+        ) and not any(marker in text for marker in hard_defect_markers):
+            return True
+
+    if issue_code == "transient_story_prop":
+        if (
+            "not a transient prop" in text
+            or "no transient story props" in text
+            or "no story props" in text
+            or "no blocking defect" in text
+            or "correctly retained" in text
+            or "correctly preserved" in text
+            or "acceptable as a fixed architectural anchor" in text
+            or "acceptable as fixed architectural context" in text
+        ) and not any(
+            marker in text
+            for marker in (
+                "must be removed",
+                "must remove",
+                "transient prop is visible",
+                "story prop is visible",
+                "train is visible",
+                "trains are visible",
+                "vehicle is visible",
+                "vehicles are visible",
+                "cart is visible",
+                "trolley is visible",
+            )
+        ):
+            return True
+
+    if issue_code == "missing_spatial_anchor":
+        anchors_present = (
+            "anchors are present" in text
+            or "anchor is present" in text
+            or "anchors are all present" in text
+        )
+        acceptable = (
+            "acceptable as a lobby interior baseline" in text
+            or "acceptable baseline" in text
+            or "no blocking defect" in text
+        )
+        hard_missing = any(
+            marker in text
+            for marker in (
+                "is missing",
+                "are missing",
+                "not visible",
+                "absent",
+                "cannot be located",
+                "cannot identify",
+            )
+        )
+        if anchors_present and acceptable and not hard_missing:
+            return True
+
     if any(token in text for token in (" but ", " however ", " although ", " except ")):
         return False
+
     return any(
         marker in text
         for marker in (
@@ -46,6 +140,10 @@ def _looks_like_positive_non_issue(message: str) -> bool:
             "no issues detected",
             "no problem detected",
             "no problems detected",
+            "satisfies the locked specification",
+            "meets the locked specification",
+            "correctly retained",
+            "correctly preserved",
         )
     ) and any(
         marker in text
@@ -54,6 +152,9 @@ def _looks_like_positive_non_issue(message: str) -> bool:
             "present",
             "clean",
             "consistent",
+            "satisfies",
+            "meets",
+            "correctly",
         )
     )
 
@@ -72,11 +173,31 @@ def _issues(values: object) -> list[VisualIssue]:
         if not isinstance(item, dict):
             continue
         message = str(item.get("message") or item.get("detail") or "")[:500]
-        if _looks_like_positive_non_issue(message):
+        code = str(item.get("code") or "VISION_NOTE")[:100]
+        folded = " ".join(message.casefold().split())
+        watermark_like = (
+            "watermark" in folded
+            or "ui overlay" in folded
+            or (
+                ("sparkle" in folded or "diamond" in folded)
+                and ("corner" in folded or "lower right" in folded)
+                and "artifact" in folded
+            )
+        )
+        if watermark_like:
+            result.append(
+                VisualIssue(
+                    code="watermark",
+                    severity="warning",
+                    message=message,
+                )
+            )
+            continue
+        if _looks_like_positive_non_issue(message, code=code):
             continue
         result.append(
             VisualIssue(
-                code=str(item.get("code") or "VISION_NOTE")[:100],
+                code=code,
                 severity="warning"
                 if str(item.get("severity", "")).casefold() == "warning"
                 else "error",
@@ -143,8 +264,14 @@ def _master_qc_rules(reference: VisualReference) -> str:
             "CHARACTER MASTER RULES: This must be a neutral reusable identity asset, not a scene. "
             "Require a clean neutral/studio-like background, non-dramatic inspection lighting, "
             "neutral pose/expression, exact locked garment types, stable face/hair/body identity, "
-            "and no scene-specific weather/action/scenery. Use issue code "
-            "scene_specific_background for an environmental backdrop, "
+            "and strict head-to-toe full-body framing with both feet fully visible and "
+            "clean margin around the complete silhouette. The camera distance should match the "
+            "repeatable "
+            "character-Master template rather than a medium/waist/thigh crop. "
+            "Use issue code incomplete_full_body when any body region or either foot is cropped, "
+            "framing_mismatch when the shot is materially tighter/looser than a reusable full-body "
+            "Master template. Also require no scene-specific weather/action/scenery. "
+            "Use issue code scene_specific_background for an environmental backdrop, "
             "scene_specific_lighting for dramatic/colored lighting, "
             "action_pose for a narrative pose, wardrobe_mismatch for wrong garment type, "
             "hair_mismatch/age_mismatch/appearance_mismatch for observable lock conflicts. "
@@ -153,13 +280,17 @@ def _master_qc_rules(reference: VisualReference) -> str:
     if reference.entity_type == "location":
         return (
             "LOCATION MASTER RULES: Judge the persistent intersection across ALL downstream "
-            "scenes. Require defining architecture/layout/fixed equipment and repeatable spatial "
-            "anchors. "
+            "scenes. Require defining architecture/layout/fixed equipment and every spatial anchor "
+            "that is explicitly named in the locked specification. Do NOT demand additional "
+            "invented anchors when source truth defines only one anchor or one topology axis. "
             "Do not bake scene-specific weather, temporary light state, readable displays, people, "
-            "handheld/action props or transient clutter into canonical identity. Use issue codes "
-            "layout_mismatch, missing_spatial_anchor, scene_specific_weather, "
-            "scene_specific_lighting, transient_story_prop, people_present or readable_text "
-            "for blocking defects. Ordinary stable furniture/decor is allowed."
+            "handheld/action props or transient clutter into canonical identity. Trains, vehicles, "
+            "carts, trolleys and other rolling stock are movable scene context, not "
+            "Location-Master identity; when visible, report transient_story_prop and name the "
+            "rolling stock in the "
+            "issue message. Use issue codes layout_mismatch, missing_spatial_anchor, "
+            "scene_specific_weather, scene_specific_lighting, transient_story_prop, people_present "
+            "or readable_text for blocking defects. Ordinary stable furniture/decor is allowed."
         )
     if reference.entity_type == "prop":
         return (
@@ -445,11 +576,7 @@ violations.
             if project is not None
             else "Downstream scene context was not supplied."
         )
-        threshold = (
-            master_reference_threshold(project, reference)
-            if project is not None
-            else 85
-        )
+        threshold = master_reference_threshold(project, reference) if project is not None else 85
         locked_specification = (
             canonical_reference_lock(project, reference)
             if project is not None
@@ -481,6 +608,9 @@ Any component below {threshold} is production-blocking.
 issues is an array of objects with code, severity ('warning' or 'error'), message.
 Use the canonical blocking issue codes described above whenever they apply, and mark them error.
 Only report real observable defects; omit categories that pass.
+NEVER emit an issue object merely to explain that a criterion is satisfied, acceptable, absent,
+correctly retained or not required. Every issue object must assert one concrete observable defect
+that actually requires correction. If a feature passes, omit it from issues entirely.
 """
         try:
             data, _model_id = await self.xkiro.vision_json(
@@ -499,14 +629,10 @@ Only report real observable defects; omit categories that pass.
             "continuity_safety",
         )
         present_components = {
-            name: _bounded(data.get(name))
-            for name in component_names
-            if name in data
+            name: _bounded(data.get(name)) for name in component_names if name in data
         }
         score = (
-            min(present_components.values())
-            if present_components
-            else _bounded(data.get("score"))
+            min(present_components.values()) if present_components else _bounded(data.get("score"))
         )
         issues = _issues(data.get("issues"))
         if project is not None:

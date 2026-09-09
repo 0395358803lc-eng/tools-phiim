@@ -39,11 +39,14 @@ from .service import StudioService
 from .storage import ProjectStorage
 from .video_merger import VideoMerger
 from .video_routes import build_video_router
+from .web_auth import install_web_auth
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 STATIC_ROOT = RESOURCE_ROOT / "static"
-DATA_ROOT = Path(os.getenv("FLOW_STUDIO_DATA_DIR", PROJECT_ROOT / "data"))
+DATA_ROOT = Path(
+    os.getenv("TH_MEDIA_DATA_DIR") or os.getenv("FLOW_STUDIO_DATA_DIR") or (PROJECT_ROOT / "data")
+)
 LOGGER = get_logger("api")
 
 
@@ -61,7 +64,8 @@ def create_app(
     service = StudioService(project_storage)
     credential_dir = (credential_root or runtime_data_root / "secrets").resolve()
     browser_sessions = browser_session_manager or GoogleFlowSessionManager(
-        runtime_data_root / "browser-sessions" / "google-flow"
+        runtime_data_root / "browser-sessions" / "google-flow",
+        credential_path=credential_dir / "google-flow-session.bin",
     )
     providers = provider_registry or build_default_registry()
     google_flow_provider: GoogleFlowBrowserProvider | None = None
@@ -108,6 +112,7 @@ def create_app(
         description="Continuity-first storyboard with provider-neutral render pipeline",
         lifespan=lifespan,
     )
+    install_web_auth(app)
     app.state.storage = project_storage
     app.state.service = service
     app.state.queue = queue
@@ -220,7 +225,9 @@ app = create_app()
 
 
 def run() -> None:
-    uvicorn.run("flow_story_studio.main:app", host="127.0.0.1", port=8010, reload=False)
+    host = os.getenv("TH_MEDIA_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = int(os.getenv("TH_MEDIA_PORT", "8010"))
+    uvicorn.run("flow_story_studio.main:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":

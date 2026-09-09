@@ -1,4 +1,5 @@
 """Film-level hard gates that run before final video merge."""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -30,6 +31,10 @@ def project_dialogue_multiset(project: Project) -> Counter[str]:
 
 def film_hard_blockers(project: Project) -> list[str]:
     blockers: list[str] = []
+    if project.semantic_readiness.status != "Ready":
+        blockers.extend(
+            f"semantic readiness: {reason}" for reason in project.semantic_readiness.blockers
+        )
     verdict = validate_project_hard_constraints(project)
     blockers.extend(verdict.errors)
 
@@ -68,9 +73,7 @@ def film_hard_blockers(project: Project) -> list[str]:
                 blockers.append(f"{scene.id}: render contract scene identity mismatch")
             if scene.render_contract.get("required_action") != scene.action:
                 blockers.append(f"{scene.id}: render contract action is stale")
-            expected_dialogue = [
-                item.model_dump(mode="json") for item in scene.dialogues
-            ]
+            expected_dialogue = [item.model_dump(mode="json") for item in scene.dialogues]
             if scene.render_contract.get("required_dialogue") != expected_dialogue:
                 blockers.append(f"{scene.id}: render contract dialogue is stale")
     return blockers

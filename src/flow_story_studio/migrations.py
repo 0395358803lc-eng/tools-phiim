@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-CURRENT_PROJECT_SCHEMA_VERSION = 5
+CURRENT_PROJECT_SCHEMA_VERSION = 8
 
 
 def migrate_project_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -74,6 +74,27 @@ def migrate_project_payload(payload: dict[str, Any]) -> dict[str, Any]:
             migrated["provider_project_id"] = migrated.pop("flow_project_id")
         migrated["schema_version"] = 5
         version = 5
+
+    if version == 5:
+        for scene in migrated.get("scenes", []):
+            scene.setdefault("semantic_truth", {})
+        migrated.setdefault("semantic_readiness", {"status": "Blocked", "score": 0})
+        migrated["schema_version"] = 6
+        version = 6
+
+    if version == 6:
+        for scene in migrated.get("scenes", []):
+            scene.setdefault("ai_semantic_proposal", {})
+        migrated["schema_version"] = 7
+        version = 7
+
+    if version == 7:
+        for scene in migrated.get("scenes", []):
+            truth = scene.setdefault("semantic_truth", {})
+            truth.setdefault("entry_part_instances", {})
+            truth.setdefault("exit_part_instances", {})
+        migrated["schema_version"] = 8
+        version = 8
 
     if version != CURRENT_PROJECT_SCHEMA_VERSION:
         raise ValueError(f"Unable to migrate project schema version: {version}")

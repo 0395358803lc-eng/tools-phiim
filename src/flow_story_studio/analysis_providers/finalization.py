@@ -17,12 +17,18 @@ from ..film.beat_integrity import restore_ai_duplicate_beats
 from ..film.validation import assert_project_hard_constraints
 from ..models import Character, ContinuityState, Location, Project, Prop
 from ..scene_contracts import seal_project_contracts
+from ..semantic_readiness import refresh_semantic_readiness
 from ..visual_bible import build_visual_bible
 from .audio_finalization import finalize_audio
 from .semantic_orchestrator import (
     normalize_semantic_scene,
     remap_to_world,
     source_canonical_world,
+)
+from .source_truth import (
+    canonicalize_location_aliases,
+    enrich_location_spatial_anchors,
+    temporal_state,
 )
 
 
@@ -154,17 +160,8 @@ def _scene_context(scene) -> str:
 
 
 def _source_clock_anchor(scene) -> str:
-    """Extract an authored watch/clock time, never a ticket/departure time."""
-    source = scene.source_text
-    patterns = (
-        r"(?:đồng\s+hồ|dong\s+ho|watch|clock).{0,90}?(\d{1,2}:\d{2})",
-        r"(\d{1,2}:\d{2}).{0,90}?(?:đồng\s+hồ|dong\s+ho|watch|clock)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, source, re.IGNORECASE | re.DOTALL)
-        if match:
-            return match.group(1)
-    return ""
+    """Return only an authored scene-time clock, never a watch/ticket/display value."""
+    return temporal_state(scene).scene_clock
 
 
 def _time_domain(scene) -> str:
@@ -199,31 +196,31 @@ def _source_daypart(scene) -> str:
 
 
 def _normalize_source_timeline(project: Project) -> Project:
-    """Replace AI clock guesses with screenplay domains and explicit authored clock anchors."""
+    """Compile scene time from scene context; display/watch/ticket clocks remain observations."""
     last_domain_time: dict[str, str] = {}
     previous_scene = None
 
     for scene in project.scenes:
-        domain = _time_domain(scene)
+        temporal = temporal_state(scene)
+        scene.semantic_truth.temporal = temporal
+        domain = {
+            "flashback": "Flashback",
+            "parallel": "Present parallel",
+            "present": "Present",
+        }.get(temporal.timeline_branch, temporal.timeline_branch.title())
         direct = previous_scene is not None and is_direct_continuation(previous_scene, scene)
-        clock = _source_clock_anchor(scene)
-        daypart = _source_daypart(scene)
+        explicit_daypart = temporal.daypart != "source-defined time"
 
-        if direct:
+        if temporal.scene_clock:
+            start_label = f"{domain} — {temporal.scene_clock}"
+        elif direct and not explicit_daypart:
             start_label = previous_scene.end_state.time
+        elif explicit_daypart:
+            start_label = f"{domain} — {temporal.daypart}"
         else:
-            start_label = last_domain_time.get(domain, f"{domain} — {daypart}")
+            start_label = last_domain_time.get(domain, f"{domain} — source-defined time")
 
-        if clock:
-            clock_label = f"{domain} — {clock}"
-            if direct:
-                end_label = clock_label
-            else:
-                start_label = clock_label
-                end_label = clock_label
-        else:
-            end_label = start_label
-
+        end_label = start_label
         scene.start_state.time = start_label
         scene.end_state.time = end_label
         last_domain_time[domain] = end_label
@@ -238,6 +235,7 @@ def _source_ground_nested_state(
     source_scene,
     previous_scene,
     characters: list[Character],
+    locations: list[Location],
 ) -> None:
     """Replace AI-contaminated nested state with deterministic screenplay-grounded state."""
     if source_scene is None:
@@ -245,6 +243,8 @@ def _source_ground_nested_state(
 
     visible_ids = set(scene.characters)
     wardrobe_by_id = {item.id: item.clothing for item in characters}
+    location_by_id = {item.id: item.name for item in locations}
+    location_name = location_by_id.get(scene.location_id, scene.location_id)
     direct = previous_scene is not None and is_direct_continuation(previous_scene, scene)
 
     start_anchor = previous_scene.end_state if direct else source_scene.start_state
@@ -256,8 +256,9 @@ def _source_ground_nested_state(
             value = str(anchor_state.character_positions.get(character_id, "")).strip()
             if not value:
                 value = (
-                    f"Visible in source-grounded {phase} frame at {scene.location_id}; "
-                    "blocking follows the authored action"
+                    f"trong {location_name}"
+                    if phase == "start"
+                    else f"ở vị trí kết thúc hành động trong {location_name}"
                 )
             grounded[character_id] = value
         return grounded
@@ -306,6 +307,30 @@ def _assert_structural_integrity(project: Project) -> None:
                 raise ValueError(f"Invalid prop reference after finalization: {scene.id}")
 
 
+def _normalize_semantic_project(project: Project) -> Project:
+    """Compile semantic truth with persistent physical prop state for the present timeline."""
+    previous_scene = None
+    present_prop_ledger = {}
+    for scene in project.scenes:
+        temporal = temporal_state(scene)
+        prior_props = present_prop_ledger if temporal.timeline_branch == "present" else None
+        normalize_semantic_scene(
+            scene,
+            characters=project.characters,
+            props=project.props,
+            previous_scene=previous_scene,
+            prior_props=prior_props,
+        )
+        if temporal.timeline_branch == "present":
+            for prop_id, state in scene.semantic_truth.exit_props.items():
+                # A visible fragment is a scene-local part instance, not the canonical
+                # whole prop. Never overwrite the whole-object ledger with a fragment.
+                if state.part == "whole":
+                    present_prop_ledger[prop_id] = state.model_copy(deep=True)
+        previous_scene = scene
+    return project
+
+
 def finalize_project(project: Project, source_project: Project | None = None) -> Project:
     """Finalize AI enrichment against screenplay-grounded semantic truth."""
     old_characters = list(project.characters)
@@ -315,8 +340,13 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     project.characters, project.locations, project.props = source_canonical_world(
         project, source_project
     )
+    project.locations, source_location_alias_map = canonicalize_location_aliases(project.locations)
     character_map = remap_to_world(old_characters, project.characters)
     location_map = remap_to_world(old_locations, project.locations)
+    location_map = {
+        key: source_location_alias_map.get(value, value) for key, value in location_map.items()
+    }
+    location_map.update(source_location_alias_map)
     prop_map = remap_to_world(old_props, project.props)
 
     valid_character_ids = {item.id for item in project.characters}
@@ -354,32 +384,23 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             valid_prop_ids=valid_prop_ids,
         )
 
-    # Semantic orchestration is source-grounded and therefore runs after ID remapping.
-    previous_scene = None
-    for scene in project.scenes:
-        normalize_semantic_scene(
-            scene,
-            characters=project.characters,
-            props=project.props,
-            previous_scene=previous_scene,
-        )
-        previous_scene = scene
+    project = enrich_location_spatial_anchors(project)
+
+    # Semantic orchestration is source-grounded and uses a persistent present-time
+    # prop ledger so durable physical state survives cuts/location changes.
+    project = _normalize_semantic_project(project)
 
     project = check_project(project, auto_fix=True)
     project = finalize_audio(project, source_project)
 
-    # Auto continuity can rewrite nested state; normalize all semantic state first.
-    source_scene_by_id = {
-        scene.id: scene for scene in source_project.scenes
-    } if source_project is not None else {}
+    # Audio/continuity finalization may change cast/delivery. Recompile semantic truth
+    # through the same persistent ledger before grounding nested visual state.
+    project = _normalize_semantic_project(project)
+    source_scene_by_id = (
+        {scene.id: scene for scene in source_project.scenes} if source_project is not None else {}
+    )
     previous_scene = None
     for scene in project.scenes:
-        normalize_semantic_scene(
-            scene,
-            characters=project.characters,
-            props=project.props,
-            previous_scene=previous_scene,
-        )
         visible = set(scene.characters)
         scene.start_state = _remap_state(
             scene.start_state,
@@ -400,6 +421,7 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             source_scene=source_scene_by_id.get(scene.id),
             previous_scene=previous_scene,
             characters=project.characters,
+            locations=project.locations,
         )
         previous_scene = scene
 
@@ -413,6 +435,15 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     # resolve camera/cast conflicts. Recompute current continuity without mutating the
     # already source-grounded state so stale pre-finalization warnings do not survive.
     project = check_project(project, auto_fix=False)
+
+    # Semantic readiness is fail-closed. Recompile deterministic truth once more when a
+    # repairable invariant remains, then expose any unresolved blocker to Production Gate.
+    project = refresh_semantic_readiness(project)
+    if project.semantic_readiness.status != "Ready":
+        project = _normalize_semantic_project(project)
+        project = _normalize_source_timeline(project)
+        project = check_project(project, auto_fix=False)
+        project = refresh_semantic_readiness(project)
 
     # Build orchestration from the exact final semantic state, then compile prompts.
     project = film_orchestrator.prepare(project)
@@ -443,5 +474,15 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
 
     _assert_structural_integrity(project)
     project = film_orchestrator.finalize(project)
+
+    # Orchestration/contract compilation can leave a pre-finalization continuity score in
+    # the serialized project. Recompute the final observable score and readiness from the
+    # exact state that will be persisted and rendered.
+    project = check_project(project, auto_fix=False)
+    project = refresh_semantic_readiness(project)
+    project.film_model["semantic_readiness"] = project.semantic_readiness.model_dump(mode="json")
+    project.film_model["continuity_score"] = project.continuity_score
+    project.film_model["continuity_warnings"] = list(project.continuity_warnings)
+
     assert_project_hard_constraints(project)
     return seal_project_contracts(project)

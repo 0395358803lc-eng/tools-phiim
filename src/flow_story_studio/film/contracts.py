@@ -1,4 +1,5 @@
 """Compile immutable render contracts from canonical project state."""
+
 from __future__ import annotations
 
 import hashlib
@@ -48,15 +49,11 @@ def compile_render_contract(
         "prop_locks": prop_locks,
         "entry_state": scene.start_state.model_dump(mode="json"),
         "required_action": scene.action,
-        "required_dialogue": [
-            item.model_dump(mode="json") for item in scene.dialogues
-        ],
+        "required_dialogue": [item.model_dump(mode="json") for item in scene.dialogues],
         "required_voiceover": scene.voiceover,
         "audio_locks": audio_lock,
         "audio_plan": (
-            audio_lock.get("scene_audio_plan", {})
-            if isinstance(audio_lock, dict)
-            else {}
+            audio_lock.get("scene_audio_plan", {}) if isinstance(audio_lock, dict) else {}
         ),
         "camera_plan": scene.camera,
         "lighting_plan": scene.lighting,
@@ -75,6 +72,9 @@ def compile_render_contract(
             },
         ),
         "expected_exit_state": scene.end_state.model_dump(mode="json"),
+        "semantic_truth": scene.semantic_truth.model_dump(mode="json"),
+        "narrative_transition": scene.semantic_truth.narrative_transition,
+        "frame_anchor": scene.semantic_truth.frame_anchor,
         "lock_mode": "strict",
         "allowed_variation": [
             "micro_expression",

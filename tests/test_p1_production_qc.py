@@ -16,11 +16,13 @@ from flow_story_studio.providers.base import RenderResult
 from flow_story_studio.providers.registry import ProviderRegistry
 from flow_story_studio.reference_manager import (
     ReferenceManager,
+    _generation_prompt,
     resolve_scene_reference,
     scene_outputs_cannot_promote_master_references,
 )
 from flow_story_studio.render_queue import RenderQueue
 from flow_story_studio.storage import ProjectStorage
+from flow_story_studio.visual_bible import canonical_reference_lock
 
 MOJIBAKE_PATTERNS = (
     r"KhÃ´ng",
@@ -283,9 +285,9 @@ async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Pat
             assert current_project is project
             assert reference_id == reference.id
             assert reference.lock_text in prompt
-            relative = (
-                Path("references") / current_project.id / "entities" / f"{reference_id}.png"
-            )
+            assert "STRICT FULL-BODY FRAMING" in prompt
+            assert "head-to-toe" in prompt
+            relative = Path("references") / current_project.id / "entities" / f"{reference_id}.png"
             target = tmp_path / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"canonical-reference")
@@ -298,9 +300,7 @@ async def test_reference_manager_generates_vision_qcs_and_approves(tmp_path: Pat
             assert model_id == "vision-selected"
             return 98, []
 
-    manager = ReferenceManager(
-        FakeRenderer(), FakeVision(), tmp_path
-    )  # type: ignore[arg-type]
+    manager = ReferenceManager(FakeRenderer(), FakeVision(), tmp_path)  # type: ignore[arg-type]
     assert await manager.ensure_reference(project, reference)
     assert reference.status == "approved"
     assert reference.approved_reference
@@ -326,3 +326,224 @@ def test_direct_dependency_blocks_stale_start_state_hash(tmp_path: Path) -> None
 
     reason = queue._dependency_block_reason(project, current)
     assert "không khớp accepted state" in reason
+
+
+def test_location_master_prompt_uses_structural_clues_not_raw_story_text() -> None:
+    project = analyze_story(
+        AnalyzeRequest(
+            name="location structural prompt",
+            original_text=SCRIPT,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+    location = next(item for item in project.locations if item.id == reference.entity_id)
+    location.architecture = "Kiến trúc đặc trưng của địa điểm, giữ nguyên tuyệt đối"
+    location.space = "Bố cục địa điểm được thiết lập ở cảnh đầu và tái sử dụng"
+    location.interior = "Nội thất và vật liệu nhất quán của địa điểm"
+    location.objects = []
+    location.spatial_anchors = "Giữ nguyên vị trí tương đối của vật thể quan trọng"
+
+    prompt = _generation_prompt(project, reference)
+
+    assert "canonical LOCATION MASTER inspection plate" in prompt
+    assert "SOURCE-GROUNDED STRUCTURAL CLUES ONLY" in prompt
+    assert "Alex holds the blue paper ticket beside the bench." not in prompt
+    assert "MAYA (THROUGH THE PHONE)" not in prompt
+    assert "LIGHTING MUST BE NEUTRAL INSPECTION EXPOSURE" in prompt
+    assert "STYLE REFERENCE FOR MATERIAL REALISM ONLY" in prompt
+
+
+def test_location_corrective_prompt_deduplicates_root_issue_codes() -> None:
+    from flow_story_studio.models import VisualIssue
+
+    project = analyze_story(
+        AnalyzeRequest(
+            name="location corrective prompt",
+            original_text=SCRIPT,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+    reference.status = "rejected"
+    reference.vision_issues = [
+        VisualIssue(
+            code="transient_state_control",
+            severity="warning",
+            message="Temporary light state present.",
+        ),
+        VisualIssue(
+            code="transient_state_control",
+            severity="warning",
+            message="Duplicate evaluator finding.",
+        ),
+        VisualIssue(
+            code="MASTER_TRANSIENT_STATE_CONTROL_BELOW_THRESHOLD",
+            severity="error",
+            message="Aggregate score failure.",
+        ),
+    ]
+
+    prompt = _generation_prompt(project, reference)
+
+    assert prompt.count("- transient_state_control:") == 1
+    assert "MASTER_TRANSIENT_STATE_CONTROL_BELOW_THRESHOLD" not in prompt
+
+
+def test_location_generation_and_vision_share_canonical_structural_clues() -> None:
+    project = analyze_story(
+        AnalyzeRequest(
+            name="location canonical alignment",
+            original_text=SCRIPT,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+    location = next(item for item in project.locations if item.id == reference.entity_id)
+    location.architecture = "Kiến trúc đặc trưng của địa điểm, giữ nguyên tuyệt đối"
+    location.space = "Bố cục địa điểm được thiết lập ở cảnh đầu và tái sử dụng"
+    location.interior = "Nội thất và vật liệu nhất quán của địa điểm"
+    location.objects = []
+    location.spatial_anchors = "Giữ nguyên vị trí tương đối của vật thể quan trọng"
+
+    lock = canonical_reference_lock(project, reference)
+    prompt = _generation_prompt(project, reference)
+
+    assert "SOURCE-GROUNDED FIXED TOPOLOGY" in lock
+    assert "waiting benches / seating zone" in lock
+    assert "SOURCE-GROUNDED STRUCTURAL CLUES ONLY" in prompt
+    assert "waiting benches / seating zone" in prompt
+    assert "Alex holds the blue paper ticket beside the bench." not in prompt
+    assert "Alex holds the blue paper ticket beside the bench." not in lock
+
+
+def test_location_master_extracts_fixed_locker_bank_anchor() -> None:
+    script = """
+TARGET RUNTIME: 8 seconds
+
+CẢNH 1 — SẢNH NHÀ GA CŨ — ĐÊM
+Minh đi về phía dãy tủ gửi đồ. Anh dừng trước tủ số 17 rồi tra chìa khóa vào ổ.
+"""
+    project = analyze_story(
+        AnalyzeRequest(
+            name="locker topology",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    location = next(item for item in project.locations if "SẢNH NHÀ GA" in item.name.upper())
+    reference = next(
+        item
+        for item in project.visual_bible.references
+        if item.entity_type == "location" and item.entity_id == location.id
+    )
+
+    lock = canonical_reference_lock(project, reference)
+    prompt = _generation_prompt(project, reference)
+
+    assert "fixed luggage-locker bank" in lock
+    assert "fixed luggage-locker bank" in prompt
+    assert "tủ số 17" not in prompt
+    assert "tra chìa khóa" not in prompt
+
+
+def test_location_master_prompt_neutralizes_window_exterior_state() -> None:
+    project = analyze_story(
+        AnalyzeRequest(
+            name="window neutralization",
+            original_text=SCRIPT,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+
+    prompt = _generation_prompt(project, reference)
+
+    assert "exterior beyond them must be soft neutral/featureless" in prompt
+    assert "must not encode cityscape brightness, sky color, weather" in prompt
+
+
+def test_location_canonical_lock_replaces_stale_generic_anchor_duplicates() -> None:
+    script = """
+TARGET RUNTIME: 8 seconds
+
+CẢNH 1 — SẢNH NHÀ GA CŨ — ĐÊM
+Minh đặt chiếc vé lên quầy vé rồi đi về phía dãy tủ gửi đồ.
+"""
+    project = analyze_story(
+        AnalyzeRequest(
+            name="location anchor dedupe",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    location = next(item for item in project.locations if "SẢNH NHÀ GA" in item.name.upper())
+    location.spatial_anchors = (
+        "SOURCE-GROUNDED FIXED TOPOLOGY: fixed ticket counter; fixed counter. "
+        "Preserve these anchors and their relative geometry across every Master/scene"
+    )
+    reference = next(
+        item
+        for item in project.visual_bible.references
+        if item.entity_type == "location" and item.entity_id == location.id
+    )
+
+    lock = canonical_reference_lock(project, reference)
+
+    assert "fixed ticket counter" in lock
+    assert "fixed luggage-locker bank" in lock
+    assert "; fixed counter" not in lock
+
+
+def test_location_master_prompt_bans_rolling_stock_and_temporary_vehicles() -> None:
+    project = analyze_story(
+        AnalyzeRequest(
+            name="location rolling stock exclusion",
+            original_text=SCRIPT,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+
+    prompt = _generation_prompt(project, reference)
+
+    assert "ABSOLUTELY NO people, trains, vehicles, carts, trolleys" in prompt
+
+
+def test_location_master_entry_threshold_and_furniture_are_unambiguous() -> None:
+    script = """
+TARGET RUNTIME: 8 seconds
+
+CẢNH 1 — CĂN HỘ CỦA MINH — ĐÊM
+Một chiếc vé trượt qua khe dưới cửa. Minh nhặt nó lên cạnh bàn.
+"""
+    project = analyze_story(
+        AnalyzeRequest(
+            name="apartment threshold topology",
+            original_text=script,
+            settings=VideoSettings(scene_duration=8),
+        )
+    )
+    reference = next(
+        item for item in project.visual_bible.references if item.entity_type == "location"
+    )
+
+    lock = canonical_reference_lock(project, reference)
+    prompt = _generation_prompt(project, reference)
+
+    assert "main entry door / threshold" in lock
+    assert "under-door clearance" not in lock
+    assert "single stable table / work surface fixed relative to wall-door-window axes" in lock
+    assert "MUST be OFF/unlit in the Master" in prompt
+    assert "omit unsourced benches" in prompt
+    assert "stools, chairs and decorative furniture" in prompt

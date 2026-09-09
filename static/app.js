@@ -205,6 +205,7 @@ function masterReferenceGateReady(reference) {
       "age_mismatch", "hair_mismatch", "wardrobe_mismatch", "wardrobe_state",
       "scene_specific_background", "background_contamination",
       "scene_specific_lighting", "lighting_mood", "action_pose",
+      "incomplete_full_body", "framing_mismatch",
       "transient_story_state", "readable_text", "logo_or_brand",
     ]),
     location: new Set([
@@ -424,6 +425,7 @@ function renderSettings() {
   $("#settingsView").innerHTML = entries.map(([label, value]) => `<div class="setting"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join("") + `<button class="secondary-btn full" id="exportPromptsBtn" style="grid-column:1/-1">Export all render prompts (.zip)</button>`;
   $("#exportPromptsBtn").onclick = () => download(`/api/projects/${state.project.id}/render-prompts.zip`);
   $("#timeline").innerHTML = state.project.timeline.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  renderProductionProjectAiMeta();
 }
 
 function filteredScenes() {
@@ -1095,51 +1097,109 @@ async function saveVideoSetup(event) {
 }
 
 function renderGoogleFlowSessionStatus(status) {
+  const accountReady = Boolean(status.google_account_configured);
+  const flowReady = Boolean(status.google_flow_configured);
+  const fullyConfigured = Boolean(status.configured);
+  const validated = status.validated === true;
+  const hasAnySession = Boolean(status.session_present)
+    || Number(status.cookie_count || 0) > 0;
+
   state.googleFlow = {
-    configured: Boolean(status.configured),
+    configured: fullyConfigured,
+    validated,
     chrome_available: Boolean(status.chrome_available),
+    google_account_configured: accountReady,
+    google_flow_configured: flowReady,
+    proxy_configured: Boolean(status.proxy_configured),
+    proxy_scheme: status.proxy_scheme || "",
+    proxy_endpoint: status.proxy_endpoint || "",
+    proxy_auth_configured: Boolean(status.proxy_auth_configured),
     active: status.active || null,
-    pending: status.pending || null,
+    pending: null,
   };
 
   const top = $("#googleFlowStatus");
-  top.classList.toggle("connected", state.googleFlow.configured);
-  top.classList.toggle("pending", Boolean(state.googleFlow.pending));
-  top.childNodes[top.childNodes.length - 1].textContent = state.googleFlow.pending
-    ? " Đang chờ xác nhận phiên Google Flow mới"
-    : state.googleFlow.configured
-      ? " Google Flow · phiên đã lưu"
-      : " Chưa có phiên Google Flow";
+  top.classList.toggle("connected", fullyConfigured && validated);
+  top.classList.toggle("pending", hasAnySession && !(fullyConfigured && validated));
+  top.childNodes[top.childNodes.length - 1].textContent = fullyConfigured && validated
+    ? " Google Flow · app đã xác thực"
+    : hasAnySession
+      ? " Google Flow · session chưa đủ/xác thực"
+      : " Chưa có Google Flow session";
 
   const line = $("#googleFlowSessionConnection");
-  line.classList.toggle("connected", state.googleFlow.configured);
-  line.classList.toggle("error", !state.googleFlow.chrome_available);
+  line.classList.toggle("connected", fullyConfigured && validated);
+  line.classList.toggle(
+    "error",
+    !state.googleFlow.chrome_available
+      || status.validated === false
+      || Boolean(status.error),
+  );
   line.querySelector("span").textContent = !state.googleFlow.chrome_available
-    ? "Không tìm thấy Google Chrome trên máy"
-    : state.googleFlow.pending
-      ? "Có phiên đăng nhập mới đang chờ bạn xác nhận"
-      : state.googleFlow.configured
-        ? "Đã có phiên Google Flow active được lưu trong Chrome profile riêng"
-        : "Chưa có phiên Google Flow active";
+    ? "Không tìm thấy Chromium/Google Chrome trên máy chủ"
+    : status.validated === false
+      ? "Session chưa đăng nhập được Google Flow app"
+      : validated
+        ? "Google Account + Google Flow đã xác thực app"
+        : !accountReady && !flowReady
+          ? "Chưa nạp Google Account và Google Flow session"
+          : !accountReady
+            ? "Thiếu Google Account session"
+            : !flowReady
+              ? "Thiếu Google Flow session"
+              : "Đã có đủ hai nguồn · bấm Kiểm tra đăng nhập Flow app";
 
-  const active = state.googleFlow.active;
-  const pending = state.googleFlow.pending;
-  const meta = [];
-  if (active) {
-    meta.push(`<div><span>ACTIVE SESSION</span><strong>${escapeHtml(active.id)}</strong><small>${active.activated_at ? new Date(active.activated_at).toLocaleString("vi-VN") : "Đã lưu"}</small></div>`);
+  const accountCount = Number(status.google_account_cookie_count || 0);
+  const flowCount = Number(status.google_flow_cookie_count || 0);
+  const proxyConfigured = Boolean(status.proxy_configured);
+  const proxyEndpoint = status.proxy_endpoint || "";
+  const proxyScheme = status.proxy_scheme || "";
+  const proxyAuth = Boolean(status.proxy_auth_configured);
+  const meta = [
+    `<div><span>AUTH MODE</span><strong>SPLIT SESSION IMPORT</strong><small>2 encrypted server vaults</small></div>`,
+    `<div><span>GOOGLE ACCOUNT COOKIES</span><strong>${accountCount}</strong><small>.google.com / accounts.google.com</small></div>`,
+    `<div><span>GOOGLE FLOW COOKIES</span><strong>${flowCount}</strong><small>flow.google.com</small></div>`,
+    `<div><span>CHROMIUM PROXY</span><strong>${proxyConfigured ? escapeHtml(proxyEndpoint) : "DIRECT"}</strong><small>${proxyConfigured ? `${escapeHtml(proxyScheme.toUpperCase())}${proxyAuth ? " · AUTH" : " · NO AUTH"}` : "Server direct network"}</small></div>`,
+  ];
+  if (status.current_url) {
+    meta.push(`<div><span>VALIDATION URL</span><strong>${escapeHtml(status.current_url)}</strong><small>${escapeHtml(status.title || "")}</small></div>`);
   }
-  if (pending) {
-    meta.push(`<div><span>PENDING SESSION</span><strong>${escapeHtml(pending.id)}</strong><small>Đang chờ xác nhận sau khi đăng nhập</small></div>`);
+  if (status.error) {
+    meta.push(`<div><span>ERROR</span><strong>${escapeHtml(status.error)}</strong></div>`);
   }
-  $("#googleFlowSessionMeta").innerHTML = meta.length
-    ? meta.join("")
-    : '<div class="empty-copy">Chưa có profile đăng nhập Google Flow.</div>';
+  $("#googleFlowSessionMeta").innerHTML = meta.join("");
 
-  $("#openGoogleFlowSessionBtn").disabled =
-    !state.googleFlow.configured || !state.googleFlow.chrome_available;
-  $("#newGoogleFlowSessionBtn").disabled =
-    !state.googleFlow.chrome_available || Boolean(state.googleFlow.pending);
-  $("#googleFlowPendingPanel").classList.toggle("hidden", !pending);
+  const accountStatus = $("#googleAccountSessionStatus");
+  if (accountStatus) {
+    accountStatus.textContent = accountReady ? `${accountCount} cookie · đã lưu` : "Chưa nạp";
+    accountStatus.classList.toggle("ready", accountReady);
+  }
+  const flowStatus = $("#googleFlowSourceSessionStatus");
+  if (flowStatus) {
+    flowStatus.textContent = flowReady ? `${flowCount} cookie · đã lưu` : "Chưa nạp";
+    flowStatus.classList.toggle("ready", flowReady);
+  }
+  const proxyStatus = $("#googleFlowProxyStatus");
+  if (proxyStatus) {
+    proxyStatus.textContent = proxyConfigured
+      ? `${proxyScheme.toUpperCase()} · ${proxyAuth ? "auth" : "no auth"}`
+      : "DIRECT";
+    proxyStatus.classList.toggle("ready", proxyConfigured);
+  }
+  const proxyError = $("#googleFlowProxyError");
+  if (proxyError) {
+    const message = status.proxy_error || "";
+    proxyError.textContent = message;
+    proxyError.classList.toggle("hidden", !message);
+  }
+
+  $("#validateGoogleFlowSessionBtn").disabled = (
+    !fullyConfigured || !state.googleFlow.chrome_available
+  );
+  $("#clearGoogleAccountSessionBtn").disabled = !accountReady;
+  $("#clearGoogleFlowSourceSessionBtn").disabled = !flowReady;
+  $("#clearGoogleFlowProxyBtn").disabled = !proxyConfigured;
+  $("#clearGoogleFlowSessionBtn").disabled = !hasAnySession;
 }
 
 async function loadGoogleFlowSessionStatus() {
@@ -1149,81 +1209,226 @@ async function loadGoogleFlowSessionStatus() {
     renderGoogleFlowSessionStatus({
       configured: false,
       chrome_available: false,
-      active: null,
-      pending: null,
+      cookie_count: 0,
+      google_account_cookie_count: 0,
+      google_flow_cookie_count: 0,
     });
     toast(`Không đọc được trạng thái Google Flow: ${error.message}`, true);
   }
 }
 
-async function createGoogleFlowSession() {
-  beginActivity(
-    "Google Flow Session",
-    "Đang tạo Chrome profile đăng nhập mới...",
-    "Không đọc/import cookie · dùng profile Chrome riêng",
-    8,
-  );
-  state.activity.kind = "google-flow-session";
+function parseSessionJsonInput(inputId, label) {
+  const raw = $(inputId).value.trim();
+  if (!raw) {
+    toast(`Hãy dán ${label} JSON trước.`, true);
+    return null;
+  }
   try {
-    const status = await api("/api/google-flow/session/new", { method: "POST" });
-    renderGoogleFlowSessionStatus(status);
-    completeActivity(
-      "Chrome đã mở · đang chờ bạn đăng nhập và xác nhận phiên.",
-      status.pending?.id || "Pending Google Flow session",
-    );
-    toast("Chrome đã mở. Hãy tự đăng nhập Google Flow rồi quay lại xác nhận phiên mới.");
-  } catch (error) {
-    failActivity(error.message || "Không tạo được Google Flow Session.", "Chrome profile");
-    toast(error.message, true);
+    const payload = JSON.parse(raw);
+    return Array.isArray(payload) ? { cookies: payload } : payload;
+  } catch (_) {
+    toast(`${label} JSON không hợp lệ.`, true);
+    return null;
   }
 }
 
-async function openGoogleFlowSession(pending = false) {
+async function importSessionSource({ inputId, endpoint, label, detail }) {
+  const payload = parseSessionJsonInput(inputId, label);
+  if (!payload) return;
+
   beginActivity(
-    "Mở Google Flow",
-    pending ? "Đang mở pending Chrome profile..." : "Đang mở active Chrome profile...",
-    pending ? "Pending session" : "Active session",
+    `Import ${label}`,
+    `Đang mã hóa và lưu ${label} trên server...`,
+    detail,
     20,
   );
   state.activity.kind = "google-flow-session";
   try {
-    const path = pending
-      ? "/api/google-flow/session/pending/open"
-      : "/api/google-flow/session/open";
-    renderGoogleFlowSessionStatus(await api(path, { method: "POST" }));
-    completeActivity("Google Flow đã mở bằng đúng Chrome profile.", pending ? "Pending session" : "Active session");
-    toast("Đã mở Google Flow bằng Chrome profile của phiên này");
-  } catch (error) {
-    failActivity(error.message || "Không mở được Google Flow.", "Chrome profile");
-    toast(error.message, true);
-  }
-}
-
-async function activateGoogleFlowSession() {
-  beginActivity("Kích hoạt Google Flow Session", "Đang xác nhận phiên đăng nhập mới...", "", 25);
-  state.activity.kind = "google-flow-session";
-  try {
-    const status = await api("/api/google-flow/session/pending/activate", { method: "POST" });
+    const status = await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    $(inputId).value = "";
     renderGoogleFlowSessionStatus(status);
-    completeActivity("Đã chuyển sang Google Flow Session mới.", status.active?.id || "Active session");
-    toast("Đã chuyển sang phiên Google Flow mới");
+    const count = label === "Google Account"
+      ? status.google_account_cookie_count
+      : status.google_flow_cookie_count;
+    completeActivity(`Đã lưu ${label}.`, `${count || 0} cookie`);
+    toast(`Đã lưu ${label} JSON.`);
+    await loadRenderStatus();
   } catch (error) {
-    failActivity(error.message || "Không kích hoạt được Google Flow Session.", "Pending session");
+    failActivity(error.message || `Không import được ${label}.`, label);
     toast(error.message, true);
   }
 }
 
-async function cancelGoogleFlowSession() {
-  beginActivity("Hủy Google Flow Session mới", "Đang hủy pending profile...", "", 30);
+async function importGoogleAccountSession() {
+  return importSessionSource({
+    inputId: "#googleAccountSessionInput",
+    endpoint: "/api/google-flow/session/google-account/import",
+    label: "Google Account",
+    detail: "Google Account encrypted vault",
+  });
+}
+
+async function importGoogleFlowSession() {
+  return importSessionSource({
+    inputId: "#googleFlowSessionInput",
+    endpoint: "/api/google-flow/session/flow/import",
+    label: "Google Flow",
+    detail: "Google Flow encrypted vault",
+  });
+}
+
+async function saveGoogleFlowProxy() {
+  const server = $("#googleFlowProxyServer").value.trim();
+  const username = $("#googleFlowProxyUsername").value.trim();
+  const password = $("#googleFlowProxyPassword").value;
+  if (!server) {
+    toast("Hãy nhập proxy server trước.", true);
+    return;
+  }
+  beginActivity(
+    "Lưu Chromium Proxy",
+    "Đang mã hóa cấu hình proxy và dừng Chromium runtime cũ...",
+    "HTTP / HTTPS / SOCKS5",
+    25,
+  );
   state.activity.kind = "google-flow-session";
   try {
-    renderGoogleFlowSessionStatus(
-      await api("/api/google-flow/session/pending", { method: "DELETE" }),
+    const status = await api("/api/google-flow/session/proxy", {
+      method: "POST",
+      body: JSON.stringify({ server, username, password }),
+    });
+    $("#googleFlowProxyServer").value = "";
+    $("#googleFlowProxyUsername").value = "";
+    $("#googleFlowProxyPassword").value = "";
+    const proxyError = $("#googleFlowProxyError");
+    if (proxyError) {
+      proxyError.textContent = "";
+      proxyError.classList.add("hidden");
+    }
+    renderGoogleFlowSessionStatus(status);
+    completeActivity(
+      "Đã lưu Chromium proxy.",
+      status.proxy_endpoint || "Proxy configured",
     );
-    completeActivity("Đã hủy pending session.", "Phiên active cũ không thay đổi");
-    toast("Đã hủy phiên đăng nhập mới; phiên active cũ không thay đổi");
+    toast("Đã lưu proxy. Bấm Kiểm tra đăng nhập Flow app để khởi động Chromium bằng tuyến mạng mới.");
+    await loadRenderStatus();
   } catch (error) {
-    failActivity(error.message || "Không hủy được pending session.", "Google Flow Session");
+    $("#googleFlowProxyPassword").value = "";
+    const proxyError = $("#googleFlowProxyError");
+    if (proxyError) {
+      proxyError.textContent = error.message || "Không lưu được proxy.";
+      proxyError.classList.remove("hidden");
+    }
+    failActivity(error.message || "Không lưu được proxy.", "Chromium Proxy");
+    toast(error.message, true);
+  }
+}
+
+async function clearGoogleFlowProxy() {
+  beginActivity(
+    "Xóa Chromium Proxy",
+    "Đang xóa proxy vault và dừng Chromium runtime cũ...",
+    "Trở về direct network",
+    25,
+  );
+  state.activity.kind = "google-flow-session";
+  try {
+    const status = await api("/api/google-flow/session/proxy", {
+      method: "DELETE",
+    });
+    $("#googleFlowProxyServer").value = "";
+    $("#googleFlowProxyUsername").value = "";
+    $("#googleFlowProxyPassword").value = "";
+    const proxyError = $("#googleFlowProxyError");
+    if (proxyError) {
+      proxyError.textContent = "";
+      proxyError.classList.add("hidden");
+    }
+    renderGoogleFlowSessionStatus(status);
+    completeActivity("Đã xóa Chromium proxy.", "Direct network");
+    toast("Đã xóa proxy. Chromium sẽ dùng mạng trực tiếp ở lần khởi động tiếp theo.");
+    await loadRenderStatus();
+  } catch (error) {
+    const proxyError = $("#googleFlowProxyError");
+    if (proxyError) {
+      proxyError.textContent = error.message || "Không xóa được proxy.";
+      proxyError.classList.remove("hidden");
+    }
+    failActivity(error.message || "Không xóa được proxy.", "Chromium Proxy");
+    toast(error.message, true);
+  }
+}
+
+async function validateGoogleFlowSession() {
+  beginActivity(
+    "Kiểm tra Google Flow Session",
+    "Đang merge hai vault, khởi động Chromium và vào Flow app thật...",
+    "Google Account + Google Flow",
+    30,
+  );
+  state.activity.kind = "google-flow-session";
+  try {
+    const status = await api("/api/google-flow/session/validate", { method: "POST" });
+    renderGoogleFlowSessionStatus(status);
+    if (!status.validated) throw new Error(status.message || "Session không hợp lệ");
+    completeActivity(
+      "Google Flow app session hợp lệ.",
+      status.current_url || "Google Flow",
+    );
+    toast("Google Flow app đã xác thực thành công.");
+    await loadRenderStatus();
+  } catch (error) {
+    await loadGoogleFlowSessionStatus();
+    failActivity(
+      error.message || "Không xác minh được session.",
+      "Google Account + Google Flow",
+    );
+    toast(error.message, true);
+  }
+}
+
+async function clearSessionSource(source, label) {
+  beginActivity(`Xóa ${label}`, `Đang xóa vault ${label}...`, "", 35);
+  try {
+    const status = await api(`/api/google-flow/session/${source}`, {
+      method: "DELETE",
+    });
+    renderGoogleFlowSessionStatus(status);
+    completeActivity(`Đã xóa ${label}.`, "Server vault");
+    toast(`Đã xóa ${label}.`);
+    await loadRenderStatus();
+  } catch (error) {
+    failActivity(error.message || `Không xóa được ${label}.`, label);
+    toast(error.message, true);
+  }
+}
+
+async function clearGoogleAccountSession() {
+  return clearSessionSource("google-account", "Google Account session");
+}
+
+async function clearGoogleFlowSourceSession() {
+  return clearSessionSource("flow", "Google Flow session");
+}
+
+async function clearGoogleFlowSession() {
+  beginActivity(
+    "Xóa toàn bộ Google session",
+    "Đang xóa cả hai encrypted vault và runtime profile...",
+    "",
+    35,
+  );
+  try {
+    const status = await api("/api/google-flow/session", { method: "DELETE" });
+    renderGoogleFlowSessionStatus(status);
+    completeActivity("Đã xóa cả hai Google session.", "Server vaults");
+    toast("Đã xóa Google Account + Google Flow session.");
+    await loadRenderStatus();
+  } catch (error) {
+    failActivity(error.message || "Không xóa được session.", "Google Flow Session");
     toast(error.message, true);
   }
 }
@@ -1508,7 +1713,16 @@ async function saveMasterVisionModel() {
   } catch (error) {
     toast(error.message, true);
   } finally {
-    if (button && button.isConnected) button.textContent = previous;
+    if (button && button.isConnected) {
+      button.textContent = previous;
+      const current = state.project?.settings?.vision_model || "";
+      button.disabled = (
+        !state.xkiroConnected
+        || !model
+        || model === current
+        || state.masterBatchActive
+      );
+    }
   }
 }
 
@@ -1941,6 +2155,135 @@ async function loadXKiroStatus() {
   }
 }
 
+function renderProductionProjectAiMeta() {
+  const container = $("#productionProjectAiMeta");
+  if (!container) return;
+  const analysis = state.project?.settings?.analysis_model || "Rule-based local";
+  const vision = state.project?.settings?.vision_model || "Chưa khóa Vision model";
+  container.innerHTML = `
+    <div><span>ANALYSIS</span><strong>${escapeHtml(analysis)}</strong></div>
+    <div><span>VISION QC</span><strong>${escapeHtml(vision)}</strong></div>
+  `;
+}
+
+function renderProductionXKiroSettings(status, models = []) {
+  const configured = Boolean(status?.configured);
+  const line = $("#productionXKiroStatus");
+  const meta = $("#productionXKiroMeta");
+  const errorBox = $("#productionXKiroError");
+  const modelList = Array.isArray(models) ? models : [];
+  const visionModels = modelList.filter((model) => Boolean(model.capabilities?.vision));
+  if (line) {
+    line.textContent = configured ? "Đã kết nối" : "Chưa cấu hình";
+    line.classList.toggle("connected", configured);
+    line.classList.remove("error");
+  }
+  if (meta) {
+    meta.innerHTML = `
+      <div><span>KEY</span><strong>${escapeHtml(status?.key_hint || "Chưa lưu")}</strong></div>
+      <div><span>MODELS</span><strong>${configured ? modelList.length : 0}</strong></div>
+      <div><span>VISION</span><strong>${configured ? visionModels.length : 0}</strong></div>
+    `;
+  }
+  if (errorBox) {
+    errorBox.textContent = "";
+    errorBox.classList.add("hidden");
+  }
+  const clearButton = $("#clearProductionXKiroKeyBtn");
+  if (clearButton) clearButton.disabled = !configured;
+  renderProductionProjectAiMeta();
+}
+
+function renderProductionXKiroError(message) {
+  const line = $("#productionXKiroStatus");
+  const errorBox = $("#productionXKiroError");
+  if (line) {
+    line.textContent = "Lỗi";
+    line.classList.remove("connected");
+    line.classList.add("error");
+  }
+  if (errorBox) {
+    errorBox.textContent = message || "Không thể cập nhật xKiro.";
+    errorBox.classList.remove("hidden");
+  }
+}
+
+async function openProductionSettings() {
+  const modal = $("#productionSettingsModal");
+  $("#productionXKiroKeyInput").value = "";
+  renderProductionProjectAiMeta();
+  const line = $("#productionXKiroStatus");
+  if (line) {
+    line.textContent = "Đang kiểm tra...";
+    line.classList.remove("connected", "error");
+  }
+  modal.showModal();
+  try {
+    const status = await api("/api/ai/xkiro/status");
+    let models = [];
+    if (status.configured) {
+      try {
+        models = await api("/api/ai/xkiro/models");
+      } catch (error) {
+        renderProductionXKiroSettings(status, []);
+        renderProductionXKiroError(`API key đang lưu nhưng catalog model chưa tải được: ${error.message}`);
+        return;
+      }
+    }
+    renderProductionXKiroSettings(status, models);
+  } catch (error) {
+    renderProductionXKiroSettings({ configured: false }, []);
+    renderProductionXKiroError(error.message);
+  }
+}
+
+async function saveProductionXKiroKey() {
+  const input = $("#productionXKiroKeyInput");
+  const key = input.value.trim();
+  if (!key) return toast("Hãy nhập API key xKiro mới", true);
+  const button = $("#saveProductionXKiroKeyBtn");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Đang xác thực...";
+  try {
+    const connection = await api("/api/ai/xkiro/connect", {
+      method: "POST",
+      body: JSON.stringify({ api_key: key }),
+    });
+    input.value = "";
+    renderXKiroConnection(connection);
+    renderProductionXKiroSettings(connection, connection.models || []);
+    toast(`Đã thay API key xKiro · ${connection.model_count} model`);
+  } catch (error) {
+    input.value = "";
+    renderProductionXKiroError(error.message);
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function clearProductionXKiroKey() {
+  const button = $("#clearProductionXKiroKeyBtn");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Đang xóa...";
+  try {
+    const status = await api("/api/ai/xkiro", { method: "DELETE" });
+    renderXKiroConnection(status);
+    renderProductionXKiroSettings(status, []);
+    $("#productionXKiroKeyInput").value = "";
+    toast("Đã xóa API key xKiro khỏi encrypted vault");
+  } catch (error) {
+    renderProductionXKiroError(error.message);
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 async function connectXKiro() {
   const key = $("#xkiroKeyInput").value.trim();
   if (!key) return toast("Hãy nhập API key xKiro", true);
@@ -2168,25 +2511,32 @@ function bindEvents() {
   $("#googleFlowStatus").onclick = async () => {
     await loadGoogleFlowSessionStatus();
     $("#googleFlowSessionModal").showModal();
-    if (
-      state.googleFlow.chrome_available
-      && !state.googleFlow.configured
-      && !state.googleFlow.pending
-    ) {
-      await createGoogleFlowSession();
-    }
   };
   $("#videoSetupBtn").onclick = openVideoSetup;
+  $("#productionSettingsBtn").onclick = openProductionSettings;
+  $("#closeProductionSettingsBtn").onclick = () => $("#productionSettingsModal").close();
+  $("#doneProductionSettingsBtn").onclick = () => $("#productionSettingsModal").close();
+  $("#saveProductionXKiroKeyBtn").onclick = saveProductionXKiroKey;
+  $("#clearProductionXKiroKeyBtn").onclick = clearProductionXKiroKey;
+  $("#productionXKiroKeyInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveProductionXKiroKey();
+    }
+  });
   $("#providerInput").onchange = () => syncRenderSetupForm(true);
   $("#closeVideoSetupBtn").onclick = () => $("#videoSetupModal").close();
   $("#cancelVideoSetupBtn").onclick = () => $("#videoSetupModal").close();
   $("#closeGoogleFlowSessionBtn").onclick = () => $("#googleFlowSessionModal").close();
   $("#doneGoogleFlowSessionBtn").onclick = () => $("#googleFlowSessionModal").close();
-  $("#openGoogleFlowSessionBtn").onclick = () => openGoogleFlowSession(false);
-  $("#newGoogleFlowSessionBtn").onclick = createGoogleFlowSession;
-  $("#reopenGoogleFlowPendingBtn").onclick = () => openGoogleFlowSession(true);
-  $("#activateGoogleFlowPendingBtn").onclick = activateGoogleFlowSession;
-  $("#cancelGoogleFlowPendingBtn").onclick = cancelGoogleFlowSession;
+  $("#importGoogleAccountSessionBtn").onclick = importGoogleAccountSession;
+  $("#importGoogleFlowSessionBtn").onclick = importGoogleFlowSession;
+  $("#saveGoogleFlowProxyBtn").onclick = saveGoogleFlowProxy;
+  $("#clearGoogleFlowProxyBtn").onclick = clearGoogleFlowProxy;
+  $("#validateGoogleFlowSessionBtn").onclick = validateGoogleFlowSession;
+  $("#clearGoogleAccountSessionBtn").onclick = clearGoogleAccountSession;
+  $("#clearGoogleFlowSourceSessionBtn").onclick = clearGoogleFlowSourceSession;
+  $("#clearGoogleFlowSessionBtn").onclick = clearGoogleFlowSession;
   $("#videoSetupForm").addEventListener("submit", saveVideoSetup);
   $("#uploadReferenceBtn").onclick = uploadReference;
   $("#generateImageBtn").onclick = generateSceneImages;

@@ -50,7 +50,7 @@ from .transport_helpers import (
 
 BASE_URL = "https://api.xkiro.com"
 CATALOG_TTL_SECONDS = 300
-SCENE_SCHEMA_VERSION = 2
+SCENE_SCHEMA_VERSION = 3
 TRANSIENT_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 ProgressCallback = Callable[[str, str], None]
 SceneCheckpointCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -134,7 +134,12 @@ class XKiroClient:
                 async with self._client(timeout=15) as client:
                     response = await client.get("/v1/models")
                 response.raise_for_status()
-                data = response.json().get("data", [])
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("xKiro model catalog root must be an object")
+                data = payload.get("data", [])
+                if not isinstance(data, list):
+                    raise ValueError("xKiro model catalog data must be a list")
                 self._catalog = [
                     XKiroModel.model_validate(
                         {
@@ -340,10 +345,7 @@ class XKiroClient:
                 raise XKiroError("Model Vision đã chọn không còn tồn tại trong catalog xKiro")
             if not bool(vision_info.capabilities.get("vision")):
                 raise XKiroError("Model Vision đã chọn không hỗ trợ phân tích hình ảnh")
-            emit(
-                f"Vision QC sẽ dùng {vision_info.display_name} "
-                f"({vision_info.access_tier})"
-            )
+            emit(f"Vision QC sẽ dùng {vision_info.display_name} ({vision_info.access_tier})")
         emit(f"Đã chọn {model_info.display_name} ({model_info.access_tier})")
         draft = analyze_story(request)
         emit(
@@ -630,7 +632,8 @@ class XKiroClient:
                     f"root object for {scene.id}. The root object's first key must be "
                     f'"id": "{scene.id}". Required root keys: id, summary, characters, '
                     "location_id, action, camera, lighting, atmosphere, voiceover, dialogues, "
-                    "start_state, end_state. dialogues must be an array nested inside the root "
+                    "start_state, end_state, semantic_proposal. dialogues must be an array "
+                    "nested inside the root "
                     "scene; NEVER return a dialogue object (character_id/text/emotion) as the "
                     "root. start_state and end_state must each be objects containing "
                     "character_positions, character_wardrobe, prop_positions, time, weather, "

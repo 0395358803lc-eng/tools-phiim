@@ -211,9 +211,7 @@ def scene_prompt(
             "source_text": scene.source_text,
             "current_characters": scene.characters,
             "current_location_id": scene.location_id,
-            "source_dialogues": [
-                item.model_dump(mode="json") for item in scene.dialogues
-            ],
+            "source_dialogues": [item.model_dump(mode="json") for item in scene.dialogues],
             "source_voiceover": scene.voiceover,
             "source_start_state": _physical_state_payload(scene.start_state),
             "source_end_state": _physical_state_payload(scene.end_state),
@@ -248,9 +246,22 @@ For a cut/re-anchor, use the supplied source_start_state as the authoritative ph
 Do not invent continuity merely to make adjacent shots match.
 
 Return one JSON object with a scenes array. Every scene must contain id, summary, characters,
-location_id, action, camera, lighting, atmosphere, voiceover, dialogues, start_state and end_state.
-Each dialogue contains character_id, text and emotion. Each state contains character_positions,
-character_wardrobe, prop_positions, time, weather, camera and notes.
+location_id, action, camera, lighting, atmosphere, voiceover, dialogues, start_state, end_state and
+semantic_proposal. Each dialogue contains character_id, text and emotion. Each state contains
+character_positions, character_wardrobe, prop_positions, time, weather, camera and notes.
+
+SEMANTIC PROPOSAL PROTOCOL:
+semantic_proposal = {{"facts": [...], "negative_facts": [...], "uncertainties": [...]}}. Each fact
+must contain entity_id, fact_type, value, evidence and confidence. confidence should be an integer
+from 0 to 100 (the application also normalizes 0–1 fractions and percentage strings). fact_type is
+one of presence, absence, ownership, location, condition, part, event, scope, time. evidence must be
+a short exact
+span copied from this scene's source_text. Put explicit negatives such as "không cầm", "không mang",
+"không có ở đây", offscreen-only or absent facts in negative_facts. A prop merely mentioned in
+dialogue, a text message, recording, CCTV, photo or screen is NOT physically present unless the
+source independently says it is present in the physical scene. If ownership/location/part cannot be
+proven from source, put the question in uncertainties instead of guessing. Never infer whole-object
+presence from a fragment, and never infer a fragment from a merely damaged whole object.
 
 CONTINUITY RULE: reuse the previous approved end state only when the current source_text is a direct
 spatial and temporal continuation. A [SCENE CONTEXT] marker, location change, flashback,
@@ -278,7 +289,10 @@ DIALOGUE/AUDIO RULE: source_dialogues and source_voiceover are immutable. Preser
 delivery channel and text exactly. If no speech is supplied, return no invented speech.
 
 STATE RULE: treat start_state/end_state as physical-state proposals constrained by source. Do not
-smuggle new characters, props, wardrobe, weather or locations through nested state fields.
+smuggle new characters, props, wardrobe, weather or locations through nested state fields. The
+application's deterministic Source Truth compiler has final authority over presence, ownership,
+location, part identity, temporal state and lifecycle events; your semantic_proposal is auditable
+evidence, not permission to override source truth.
 
 Preserve the source meaning and chronology exactly. Output JSON only.
 

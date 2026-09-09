@@ -46,13 +46,13 @@ Project JSON có `schema_version`. Payload cũ được migration theo version; 
 
 Schema migration hiện chuyển các field render legacy sang tên provider-neutral nhưng vẫn bảo đảm project cũ mở được.
 
-## Credentials and local API
+## Credentials and Web API
 
-xKiro API key được bảo vệ bằng Windows DPAPI. Desktop session dùng token ngẫu nhiên theo process.
+Windows desktop vẫn dùng DPAPI. Linux/web dùng encrypted server vault; master key phải nằm ngoài Git và có quyền đọc giới hạn cho user chạy service.
 
-Mutating API requests (`POST`, `PUT`, `PATCH`, `DELETE`) yêu cầu header `X-Flow-Studio-Session`. Tên header này được giữ vì compatibility của ứng dụng desktop hiện tại.
+Web mode dùng tài khoản single-user và HttpOnly SameSite session cookie. Khi auth web được bật, toàn bộ API/project/media bị chặn nếu chưa đăng nhập; `/api/health` và trang login là ngoại lệ cần cho healthcheck.
 
-API chỉ bind `127.0.0.1` trên cổng ngẫu nhiên.
+Header `X-Flow-Studio-Session` vẫn được giữ để compatibility với desktop loopback cũ. Web bind host/port qua biến runtime và chỉ được public qua HTTPS.
 
 ## Workspace concurrency
 
@@ -60,7 +60,7 @@ Workspace được bảo vệ bởi `.flow-story-studio.lock`. Đây là tên ru
 
 ## Dependency reproducibility
 
-`requirements.lock.txt` là constraints được xác nhận cho Windows/Python 3.12.
+`requirements.lock.txt` là constraints desktop Windows; `requirements-linux.lock.txt` ghi snapshot dependency đã nghiệm thu trên web server Linux hiện tại.
 
 Setup production chỉ cài project dependencies thực sự. Không có vendored render CLI, cookie runtime hoặc browser profile trong release artifact.
 
@@ -79,6 +79,10 @@ Không được loại FFmpeg khi thay renderer.
 
 Không phát hành production installer unsigned. `scripts/sign-artifact.ps1` dùng Windows SDK `signtool.exe`, SHA-256 digest và RFC3161 timestamp.
 
-## WebView2 prerequisite
+## Web deployment
 
-Installer kiểm tra Microsoft Edge WebView2 Evergreen Runtime. Nếu thiếu, bootstrapper chính thức của Microsoft được tải, xác minh Authenticode và cài trước TH Media.
+Linux setup dùng `scripts/setup-web-linux.sh`; healthcheck dùng `scripts/healthcheck-web.sh`. Môi trường Replit/Nix hiện tại cần build `greenlet` từ source nếu wheel Playwright không nạp được C++ runtime.
+
+Google Flow dùng Chromium headless/CDP trên server và encrypted imported session. Khi triển khai domain thật phải đặt reverse proxy TLS ở trước FastAPI và bật secure cookie.
+
+WebView2 chỉ còn là prerequisite của gói desktop Windows tùy chọn.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -32,6 +33,8 @@ from .service import StudioService
 from .storage import ProjectStorage
 from .visual_bible import canonical_reference_lock
 from .visual_qc import VisualQCAnalyzer
+
+LOGGER = logging.getLogger(__name__)
 
 
 def build_project_router(
@@ -100,11 +103,16 @@ def build_project_router(
             models = await xkiro.list_models(free_only=False)
         except XKiroError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        vision_models = {
-            model.id
-            for model in models
-            if bool(model.capabilities.get("vision"))
-        }
+        except Exception as exc:
+            LOGGER.exception(
+                "Unexpected xKiro Vision catalog failure project=%s",
+                project_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Không thể xác minh Vision model từ xKiro. Hãy thử lại.",
+            ) from exc
+        vision_models = {model.id for model in models if bool(model.capabilities.get("vision"))}
         if patch.vision_model not in vision_models:
             raise HTTPException(
                 status_code=422,
@@ -118,6 +126,15 @@ def build_project_router(
             raise HTTPException(status_code=423, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except OSError as exc:
+            LOGGER.exception(
+                "Failed to persist Vision settings project=%s",
+                project_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Không thể lưu Vision model vào project. Hãy thử lại.",
+            ) from exc
 
     @router.patch("/api/projects/{project_id}/image-settings", response_model=Project)
     async def update_image_settings(
@@ -141,9 +158,7 @@ def build_project_router(
                 detail=f"Không đọc được image model từ provider: {exc}",
             ) from exc
         image_models = {
-            str(model)
-            for model in health.get("image_models", [])
-            if str(model).strip()
+            str(model) for model in health.get("image_models", []) if str(model).strip()
         }
         if patch.image_model not in image_models:
             raise HTTPException(
@@ -270,10 +285,7 @@ def build_project_router(
         master_changed = (
             reference.status == "approved"
             and bool(reference.approved_reference)
-            and (
-                previous_status != "approved"
-                or previous_approved != reference.approved_reference
-            )
+            and (previous_status != "approved" or previous_approved != reference.approved_reference)
         )
         if master_changed:
             project = service.refresh_after_master_reference_change(
@@ -400,8 +412,7 @@ def build_project_router(
             reference.vision_issues = issues
             reference.vision_model = project.settings.vision_model
             vision_unavailable = any(
-                issue.code in {"VISION_UNAVAILABLE", "REFERENCE_MISSING"}
-                for issue in issues
+                issue.code in {"VISION_UNAVAILABLE", "REFERENCE_MISSING"} for issue in issues
             )
             passed = not master_reference_qc_blockers(project, reference)
             if passed:
@@ -424,10 +435,7 @@ def build_project_router(
         master_changed = (
             reference.status == "approved"
             and bool(reference.approved_reference)
-            and (
-                previous_status != "approved"
-                or previous_approved != reference.approved_reference
-            )
+            and (previous_status != "approved" or previous_approved != reference.approved_reference)
         )
         if master_changed:
             project = service.refresh_after_master_reference_change(
@@ -447,8 +455,7 @@ def build_project_router(
             "blockers": blockers,
             "master_count": len(project.visual_bible.references),
             "approved_count": sum(
-                reference.status == "approved"
-                for reference in project.visual_bible.references
+                reference.status == "approved" for reference in project.visual_bible.references
             ),
         }
 

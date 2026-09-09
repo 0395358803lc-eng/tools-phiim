@@ -1,6 +1,6 @@
 # TH Media
 
-TH Media là ứng dụng Windows desktop cho pipeline sản xuất phim theo hướng continuity-first:
+TH Media là ứng dụng web cho pipeline sản xuất phim theo hướng continuity-first; lớp Windows desktop cũ được giữ dưới dạng compatibility tùy chọn:
 
 ```text
 Screenplay
@@ -31,7 +31,7 @@ Hiện core **không đóng gói render backend mặc định**. Kiến trúc re
 - Visual QC, Audio QC, Continuity QC và Production Gate fail-closed.
 - FFmpeg media tools, final merge và chống video trùng lặp.
 - Project JSON có versioned migration và backup.
-- Windows desktop WebView2 + FastAPI loopback.
+- Web runtime FastAPI + SPA HTML/CSS/JavaScript; Windows WebView2 chỉ còn là optional compatibility.
 
 ## Render engine
 
@@ -75,7 +75,18 @@ Mỗi scene có một `image_plan` được biên dịch từ Visual Bible và c
 - Nếu semantic plan thay đổi (nhân vật, location, action, camera, lighting, state...), ảnh scene đã tạo trước đó bị invalidated.
 - UI `Project → Bible` là Master Reference Library; UI `Scene editor → Tạo ảnh` chỉ hiển thị REUSE MASTER, strategy, anchor, identity/composition locks, start-frame prompt và target-frame prompt.
 
-## Chạy trên Windows
+## Chạy Web trên Linux
+
+```bash
+cd /home/runner/workspace/tools-phiim
+./scripts/setup-web-linux.sh
+./scripts/start-web-daemon.sh
+./scripts/healthcheck-web.sh
+```
+
+Runtime hiện tại dùng `/home/runner/workspace/thmedia-data/thmedia.env`. Web API bind theo `TH_MEDIA_HOST/TH_MEDIA_PORT`; khi public qua HTTPS phải bật secure cookie ở reverse proxy/runtime.
+
+## Chạy desktop trên Windows
 
 ```powershell
 cd C:\Users\Admin\Desktop\phim\tools-phiim
@@ -97,7 +108,7 @@ Trong bước Phân tích nội dung:
 
 `vision_model` được lưu trong settings của project và được dùng bắt buộc cho QC 5 frame, QC continuity giữa hai clip trực tiếp và QC reference image. Nếu model Vision đã chọn không còn khả dụng hoặc mất capability Vision, QC fail-closed thay vì âm thầm đổi model.
 
-Key được lưu bằng Windows DPAPI, không ghi vào project JSON. Pipeline xKiro dùng checkpoint để tiếp tục công việc dài, sau đó vẫn đi qua cùng Semantic Finalization, Canonical Film Model và Scene Contract.
+Key không ghi vào project JSON. Desktop Windows tiếp tục dùng DPAPI; Linux/web dùng encrypted server vault. Pipeline xKiro dùng checkpoint để tiếp tục công việc dài, sau đó vẫn đi qua cùng Semantic Finalization, Canonical Film Model và Scene Contract.
 
 API liên quan:
 
@@ -110,25 +121,22 @@ API liên quan:
 - `GET /api/analysis/jobs/{job_id}`
 - `DELETE /api/analysis/jobs/{job_id}`
 
-## Google Flow browser session
+## Google Flow session trên Web
 
-Nút trạng thái Google Flow trên thanh trên cùng quản lý phiên đăng nhập bằng Chrome profile riêng, không dùng Flow CLI và không import/export cookie.
+Google Flow chạy bằng Chromium worker trên server. Người dùng không nhập mật khẩu Google vào TH Media; thay vào đó, UI nhận Playwright storage-state JSON hoặc danh sách cookie của phiên Google đã đăng nhập.
 
-- Lần đầu bấm khi chưa có phiên: TH Media tạo một pending Chrome profile và mở `https://labs.google/fx/tools/flow`.
-- Người dùng tự đăng nhập Google trong Chrome. TH Media không nhận, đọc hoặc lưu mật khẩu Google.
-- Sau khi đăng nhập xong, bấm `Xác nhận dùng phiên mới` để chuyển pending profile thành active.
-- Khi tạo phiên mới trong lúc đã có active session, active cũ vẫn giữ nguyên cho đến lúc xác nhận profile mới; nếu hủy, active cũ không đổi.
-- Renderer Google Flow sau này sẽ lấy profile active qua `GoogleFlowSessionManager.active_profile_dir()`.
-- Trạng thái session được lưu trong workspace tại `browser-sessions/google-flow`; dữ liệu đăng nhập thực tế do Chrome quản lý bên trong profile riêng.
+- Chỉ cookie thuộc domain Google được chấp nhận; cookie domain khác bị loại bỏ.
+- Session được mã hóa trong server vault và API trạng thái chỉ trả metadata, không trả cookie.
+- Nút `Import session` lưu session; nút `Kiểm tra session` khởi động Chromium/CDP và xác minh trạng thái đăng nhập.
+- Renderer tiếp tục dùng `GoogleFlowBrowserWorker`; chỉ lớp session/Chrome transport được thay đổi cho Linux/web.
+- Runtime dùng persistent Chromium profile riêng dưới `browser-sessions/google-flow`.
 
 API:
 
 - `GET /api/google-flow/session`
-- `POST /api/google-flow/session/new`
-- `POST /api/google-flow/session/open`
-- `POST /api/google-flow/session/pending/open`
-- `POST /api/google-flow/session/pending/activate`
-- `DELETE /api/google-flow/session/pending`
+- `POST /api/google-flow/session/import`
+- `POST /api/google-flow/session/validate`
+- `DELETE /api/google-flow/session`
 
 ## Kiểm thử
 

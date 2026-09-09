@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from ..google_flow_browser_worker import GoogleFlowBrowserWorker
+from ..google_flow_browser_worker import GoogleFlowBrowserError, GoogleFlowBrowserWorker
 from ..models import Project, Scene
 from .base import RenderResult
 
@@ -47,14 +47,23 @@ class GoogleFlowBrowserProvider:
     ) -> str:
         image_model = project.settings.image_model or "Nano Banana 2"
         async with self._lock:
-            asset = await asyncio.to_thread(
-                self.worker.generate_image,
-                project,
-                prompt=prompt,
-                output_token=reference_id,
-                model=image_model,
-                ingredient_files=ingredient_files,
-            )
+            asset = None
+            for attempt in range(2):
+                try:
+                    asset = await asyncio.to_thread(
+                        self.worker.generate_image,
+                        project,
+                        prompt=prompt,
+                        output_token=reference_id,
+                        model=image_model,
+                        ingredient_files=ingredient_files,
+                    )
+                    break
+                except GoogleFlowBrowserError as exc:
+                    if "[agent_failed]" not in str(exc) or attempt >= 1:
+                        raise
+            if asset is None:
+                raise GoogleFlowBrowserError("Google Flow agent retry không tạo được asset")
         project.provider_project_id = asset.project_id
         return asset.result_file
 

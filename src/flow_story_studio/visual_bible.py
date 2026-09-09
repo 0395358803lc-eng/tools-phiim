@@ -54,20 +54,103 @@ def _stable_location_fragment(value: object) -> str:
     return text.strip(" ,;.-")
 
 
-def canonical_location_lock(item) -> str:
+def source_grounded_location_clues(
+    project: Project,
+    reference: VisualReference,
+) -> list[str]:
+    """Return deterministic fixed structural clues shared by generation and Vision QC."""
+    if reference.entity_type != "location":
+        return []
+
+    clues: list[str] = []
+    seen: set[str] = set()
+
+    def add(label: str) -> None:
+        if label not in seen:
+            seen.add(label)
+            clues.append(label)
+
+    name = str(reference.name or "").casefold()
+    name_rules = (
+        ("hành lang", "clear longitudinal corridor axis"),
+        ("corridor", "clear longitudinal corridor axis"),
+        ("sảnh", "open lobby/hall volume"),
+        ("lobby", "open lobby/hall volume"),
+        ("hall", "open lobby/hall volume"),
+        ("phòng", "enclosed room volume"),
+        ("room", "enclosed room volume"),
+        ("căn hộ", "apartment room envelope"),
+        ("apartment", "apartment room envelope"),
+        ("quầy vé", "fixed ticket-counter zone"),
+        ("ticket counter", "fixed ticket-counter zone"),
+        ("khu ghế chờ", "stable waiting-seat zone"),
+        ("waiting area", "stable waiting-seat zone"),
+        ("sân ga", "platform / track-facing axis"),
+        ("platform", "platform / track-facing axis"),
+        ("station", "station interior / circulation volume"),
+    )
+    for token, label in name_rules:
+        if token in name:
+            add(label)
+
+    scenes = [
+        scene
+        for scene in getattr(project, "scenes", [])
+        if scene.location_id == reference.entity_id
+    ]
+    combined = " ".join(str(scene.source_text or "") for scene in scenes).casefold()
+    source_rules = (
+        (
+            ("khe dưới cửa",),
+            "main entry door / threshold",
+        ),
+        (("cửa ra vào", "doorway", "door"), "fixed doorway / threshold"),
+        (("cửa sổ", "window"), "window opening"),
+        (("thang máy", "elevator"), "elevator bank"),
+        (("cầu thang", "stairs"), "stairs"),
+        (("quầy vé", "ticket counter"), "fixed ticket counter"),
+        (("ghế chờ", "waiting bench", "bench"), "waiting benches / seating zone"),
+        (("màn hình cctv", "cctv monitor"), "fixed CCTV monitor-wall hardware"),
+        (
+            ("dãy tủ gửi đồ", "tủ gửi đồ", "locker bank", "luggage locker", "lockers"),
+            "fixed luggage-locker bank",
+        ),
+        (("sân ga", "platform"), "platform edge / track-facing orientation"),
+        (("đường ray", "rail track", "tracks"), "rail-track orientation"),
+        (
+            ("cạnh bàn", "trên bàn", "bàn", "table"),
+            "single stable table / work surface fixed relative to wall-door-window axes; "
+            "exclude extra loose bench/stool/chair furniture unless source-named",
+        ),
+    )
+    for tokens, label in source_rules:
+        if any(token in combined for token in tokens):
+            add(label)
+
+    return clues
+
+
+def canonical_location_lock(
+    item,
+    *,
+    spatial_anchors_override: str = "",
+) -> str:
     """Build a reusable location identity that excludes scene-state attributes."""
     stable_objects = [
-        cleaned
-        for raw in item.objects
-        if (cleaned := _stable_location_fragment(raw))
+        cleaned for raw in item.objects if (cleaned := _stable_location_fragment(raw))
     ]
     objects = ", ".join(stable_objects) if stable_objects else "fixed environmental objects"
+    anchors = (
+        _stable_location_fragment(spatial_anchors_override)
+        if spatial_anchors_override
+        else _stable_location_fragment(item.spatial_anchors)
+    )
     return (
         f"{item.id} {item.name}: {_stable_location_fragment(item.place_type)}; "
         f"architecture {_stable_location_fragment(item.architecture)}; "
         f"layout {_stable_location_fragment(item.space)}; "
         f"interior {_stable_location_fragment(item.interior)}; "
-        f"spatial anchors {_stable_location_fragment(item.spatial_anchors)}; "
+        f"spatial anchors {anchors}; "
         f"fixed objects {objects}. "
         "CANONICAL BASELINE EXCLUDES time-of-day, weather/precipitation, temporary lighting "
         "intensity/color/spill, people, action props, temporary clutter and readable display "
@@ -87,7 +170,18 @@ def canonical_reference_lock(project: Project, reference: VisualReference) -> st
             None,
         )
         if item is not None:
-            return canonical_location_lock(item)
+            clues = source_grounded_location_clues(project, reference)
+            if not clues:
+                return canonical_location_lock(item)
+            anchor_text = (
+                "SOURCE-GROUNDED FIXED TOPOLOGY: "
+                + "; ".join(clues)
+                + ". Preserve these anchors and their relative geometry across every Master/scene"
+            )
+            return canonical_location_lock(
+                item,
+                spatial_anchors_override=anchor_text,
+            )
     if reference.entity_type == "character":
         item = next(
             (
@@ -101,11 +195,7 @@ def canonical_reference_lock(project: Project, reference: VisualReference) -> st
             return _character_lock(item)
     if reference.entity_type == "prop":
         item = next(
-            (
-                prop
-                for prop in getattr(project, "props", [])
-                if prop.id == reference.entity_id
-            ),
+            (prop for prop in getattr(project, "props", []) if prop.id == reference.entity_id),
             None,
         )
         if item is not None:
@@ -273,7 +363,9 @@ def build_visual_bible(project: Project) -> Project:
         next_scene.start_state.notes = boundary_note
 
     if project.scenes:
-        project.scenes[0].start_state.notes = (
+        project.scenes[
+            0
+        ].start_state.notes = (
             "Opening scene; establish from canonical source truth and visual references."
         )
     return compile_project_image_plans(project)

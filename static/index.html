@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#071018">
   <title>TH Media · AI Story Production</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=1.8.11">
+  <link rel="stylesheet" href="/assets/styles.css?v=1.9.3">
 </head>
 <body>
   <div class="app-shell">
@@ -21,6 +21,7 @@
       <div class="top-actions">
         <button class="status-pill" id="googleFlowStatus" title="Quản lý phiên đăng nhập Google Flow"><i></i> Chưa có phiên Google Flow</button>
         <button class="ghost-btn" id="videoSetupBtn">Thiết lập video</button>
+        <button class="ghost-btn" id="productionSettingsBtn" type="button" aria-label="Mở Settings">Settings</button>
         <button class="ghost-btn" id="openProjectsBtn">Mở đã lưu</button>
         <button class="ghost-btn" id="exportBtn" disabled>Xuất project</button>
         <button class="primary-btn compact" id="newProjectBtn">+ Dự án mới</button>
@@ -333,29 +334,119 @@
   </dialog>
 
   <dialog class="modal narrow" id="googleFlowSessionModal">
-    <div class="modal-head"><div><span class="eyebrow">GOOGLE FLOW SESSION</span><h2>Phiên đăng nhập Google Flow</h2></div><button class="close-btn" id="closeGoogleFlowSessionBtn" type="button">×</button></div>
-    <p class="step-helper">TH Media mở Google Chrome bằng profile riêng của ứng dụng. Bạn tự đăng nhập Google trong Chrome; ứng dụng không yêu cầu, đọc hoặc lưu mật khẩu và không import/export cookie.</p>
+    <div class="modal-head"><div><span class="eyebrow">GOOGLE FLOW SESSION</span><h2>Đăng nhập bằng 2 nguồn session</h2></div><button class="close-btn" id="closeGoogleFlowSessionBtn" type="button">×</button></div>
+    <p class="step-helper">Nạp riêng JSON cookie của tài khoản Google và JSON cookie của Google Flow. Hai nguồn được mã hóa trong hai vault độc lập rồi merge khi Chromium worker chạy.</p>
     <section class="ai-config flow-session-card">
-      <div class="connection-line" id="googleFlowSessionConnection"><i></i><span>Đang kiểm tra phiên đã lưu...</span></div>
+      <div class="connection-line" id="googleFlowSessionConnection"><i></i><span>Đang kiểm tra session...</span></div>
       <div class="flow-session-meta" id="googleFlowSessionMeta"></div>
     </section>
-    <div class="flow-session-actions">
-      <button class="secondary-btn" id="openGoogleFlowSessionBtn" type="button">Mở Google Flow bằng phiên hiện tại</button>
-      <button class="primary-btn" id="newGoogleFlowSessionBtn" type="button">Tạo phiên đăng nhập mới</button>
-    </div>
-    <section class="flow-session-pending hidden" id="googleFlowPendingPanel">
-      <div class="warning-item ok">
-        <strong>Chrome đã mở bằng một profile mới.</strong>
-        <span>Hãy đăng nhập tài khoản Google bạn muốn dùng, truy cập được Google Flow, rồi quay lại TH Media và xác nhận phiên mới.</span>
+
+    <section class="flow-session-source-card">
+      <div class="flow-session-source-head">
+        <div><span class="eyebrow">01 · GOOGLE ACCOUNT</span><strong>Tài khoản Google</strong></div>
+        <span class="flow-session-source-status" id="googleAccountSessionStatus">Chưa nạp</span>
       </div>
+      <p class="helper">Dán JSON cookie/storage-state lấy từ Chrome đang đăng nhập Google Account. Hệ thống chỉ giữ cookie Google Account/.google.com và không nhận cookie Flow vào vault này.</p>
+      <textarea class="code-area" id="googleAccountSessionInput" rows="9" placeholder='[{"domain":".google.com","name":"SID","value":"..."}]'></textarea>
       <div class="flow-session-actions">
-        <button class="secondary-btn" id="reopenGoogleFlowPendingBtn" type="button">Mở lại cửa sổ đăng nhập</button>
-        <button class="primary-btn" id="activateGoogleFlowPendingBtn" type="button">Xác nhận dùng phiên mới</button>
-        <button class="danger-ghost-btn" id="cancelGoogleFlowPendingBtn" type="button">Hủy phiên mới</button>
+        <button class="primary-btn" id="importGoogleAccountSessionBtn" type="button">Lưu Google Account JSON</button>
+        <button class="danger-ghost-btn" id="clearGoogleAccountSessionBtn" type="button">Xóa Google Account</button>
       </div>
     </section>
-    <p class="helper">Khi xác nhận phiên mới, profile mới sẽ trở thành phiên active cho renderer Google Flow sau này. Phiên cũ chỉ bị chuyển sang inactive, không bị ghi đè trong lúc bạn đang đăng nhập.</p>
+
+    <section class="flow-session-source-card">
+      <div class="flow-session-source-head">
+        <div><span class="eyebrow">02 · GOOGLE FLOW</span><strong>Google Flow</strong></div>
+        <span class="flow-session-source-status" id="googleFlowSourceSessionStatus">Chưa nạp</span>
+      </div>
+      <p class="helper">Dán JSON cookie/storage-state export khi đang ở flow.google.com. Vault này chỉ giữ cookie thuộc flow.google.com/.flow.google.com.</p>
+      <textarea class="code-area" id="googleFlowSessionInput" rows="9" placeholder='[{"domain":"flow.google.com","name":"OSID","value":"..."}]'></textarea>
+      <div class="flow-session-actions">
+        <button class="primary-btn" id="importGoogleFlowSessionBtn" type="button">Lưu Google Flow JSON</button>
+        <button class="danger-ghost-btn" id="clearGoogleFlowSourceSessionBtn" type="button">Xóa Google Flow</button>
+      </div>
+    </section>
+
+    <section class="flow-session-source-card">
+      <div class="flow-session-source-head">
+        <div><span class="eyebrow">03 · CHROMIUM PROXY</span><strong>Proxy cho Chromium trên server</strong></div>
+        <span class="flow-session-source-status" id="googleFlowProxyStatus">Chưa cấu hình</span>
+      </div>
+      <p class="helper">Hỗ trợ <code>http://host:port</code>, <code>https://host:port</code> hoặc <code>socks5://host:port</code>. HTTP/HTTPS và SOCKS5 đều có thể dùng username/password. <code>sock5://</code> cũng được tự chuẩn hóa thành <code>socks5://</code>.</p>
+      <label class="field-label spaced">Proxy server</label>
+      <input id="googleFlowProxyServer" type="text" autocomplete="off" placeholder="http://host:port hoặc socks5://host:port">
+      <div class="form-row two flow-proxy-auth-row">
+        <label><span class="field-label">Username (tùy chọn)</span><input id="googleFlowProxyUsername" type="text" autocomplete="off" placeholder="proxy username"></label>
+        <label><span class="field-label">Password (tùy chọn)</span><input id="googleFlowProxyPassword" type="password" autocomplete="new-password" placeholder="proxy password"></label>
+      </div>
+      <p class="helper">Proxy được lưu trong encrypted vault riêng. API trạng thái không trả lại username/password. Với SOCKS5 có auth, server dùng local authenticated bridge và không đưa credential vào command line Chromium.</p>
+      <div class="warning-item hidden" id="googleFlowProxyError"></div>
+      <div class="flow-session-actions">
+        <button class="primary-btn" id="saveGoogleFlowProxyBtn" type="button">Lưu proxy</button>
+        <button class="danger-ghost-btn" id="clearGoogleFlowProxyBtn" type="button">Xóa proxy</button>
+      </div>
+    </section>
+
+    <p class="helper">Không nhập mật khẩu Google. API trạng thái chỉ trả số lượng cookie, không trả lại giá trị cookie đã lưu.</p>
+    <div class="flow-session-actions flow-session-final-actions">
+      <button class="secondary-btn" id="validateGoogleFlowSessionBtn" type="button">Kiểm tra đăng nhập Flow app</button>
+      <button class="danger-ghost-btn" id="clearGoogleFlowSessionBtn" type="button">Xóa cả hai session</button>
+    </div>
     <div class="modal-actions"><button class="primary-btn" id="doneGoogleFlowSessionBtn" type="button">Đóng</button></div>
+  </dialog>
+
+  <dialog class="modal narrow" id="productionSettingsModal">
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">PRODUCTION SETTINGS</span>
+        <h2>Settings</h2>
+      </div>
+      <button class="close-btn" id="closeProductionSettingsBtn" type="button">×</button>
+    </div>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <div>
+          <span class="eyebrow">AI · XKIRO</span>
+          <strong>API key xKiro</strong>
+        </div>
+        <span class="settings-status" id="productionXKiroStatus">Đang kiểm tra...</span>
+      </div>
+      <div class="settings-kv-grid" id="productionXKiroMeta">
+        <div><span>KEY</span><strong>—</strong></div>
+        <div><span>MODELS</span><strong>—</strong></div>
+        <div><span>VISION</span><strong>—</strong></div>
+      </div>
+      <p class="helper">Key được xác thực với xKiro trước khi thay thế key đang lưu. API key đầy đủ không được trả lại giao diện sau khi lưu.</p>
+
+      <label>
+        <span>API key xKiro mới</span>
+        <input id="productionXKiroKeyInput" type="password" autocomplete="new-password" placeholder="sk-xt-••••••••••••">
+      </label>
+      <div class="settings-secret-actions">
+        <button class="primary-btn" id="saveProductionXKiroKeyBtn" type="button">Xác thực &amp; lưu key mới</button>
+        <button class="danger-ghost-btn" id="clearProductionXKiroKeyBtn" type="button">Xóa key đã lưu</button>
+      </div>
+      <div class="warning-item hidden" id="productionXKiroError"></div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <div>
+          <span class="eyebrow">PROJECT AI</span>
+          <strong>Model đang dùng trong project</strong>
+        </div>
+      </div>
+      <div class="settings-kv-grid" id="productionProjectAiMeta">
+        <div><span>ANALYSIS</span><strong>—</strong></div>
+        <div><span>VISION QC</span><strong>—</strong></div>
+      </div>
+      <p class="helper">Đổi API key không tự thay model đã khóa trong project. Nếu model hiện tại vẫn tồn tại trong catalog mới, pipeline tiếp tục dùng đúng model đó.</p>
+    </section>
+
+    <div class="modal-actions">
+      <button class="secondary-btn" id="doneProductionSettingsBtn" type="button">Đóng</button>
+    </div>
   </dialog>
 
   <dialog class="modal narrow" id="projectsModal">
@@ -383,6 +474,6 @@
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="toast" id="toast"></div>
-  <script src="/assets/app.js?v=1.8.11"></script>
+  <script src="/assets/app.js?v=1.9.6"></script>
 </body>
 </html>

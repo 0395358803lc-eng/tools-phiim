@@ -195,7 +195,6 @@ def test_production_renderer_gate_requires_passing_audio_qc() -> None:
     assert not _gate().is_scene_production_ready(project, scene)
 
 
-
 def test_master_gate_uses_stricter_character_floor() -> None:
     project, _scene = _accepted_project()
     project.settings.vision_model = "vision-selected"
@@ -255,3 +254,51 @@ def test_project_master_gate_requires_physical_files(tmp_path) -> None:
     (tmp_path / project.visual_bible.references[0].approved_reference).unlink()
     blockers = _gate().project_master_blockers(project, data_root=tmp_path)
     assert any("approved image file is missing" in item for item in blockers)
+
+
+def test_master_gate_blocks_incomplete_character_full_body_warning() -> None:
+    from flow_story_studio.models import VisualIssue
+
+    project, _scene = _accepted_project()
+    project.settings.vision_model = "vision-selected"
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    reference.status = "approved"
+    reference.approved_reference = "references/master.jpg"
+    reference.vision_model = "vision-selected"
+    reference.vision_score = 95
+    reference.vision_issues = [
+        VisualIssue(
+            code="incomplete_full_body",
+            severity="warning",
+            message="Feet are cropped from the character Master.",
+        )
+    ]
+
+    blockers = _gate().master_reference_qc_blockers(project, reference)
+
+    assert any("incomplete_full_body" in item for item in blockers)
+
+
+def test_master_gate_blocks_character_framing_mismatch_warning() -> None:
+    from flow_story_studio.models import VisualIssue
+
+    project, _scene = _accepted_project()
+    project.settings.vision_model = "vision-selected"
+    reference = project.visual_bible.references[0]
+    reference.entity_type = "character"
+    reference.status = "approved"
+    reference.approved_reference = "references/master.jpg"
+    reference.vision_model = "vision-selected"
+    reference.vision_score = 95
+    reference.vision_issues = [
+        VisualIssue(
+            code="framing_mismatch",
+            severity="warning",
+            message="Character is framed as a thigh crop instead of a full-body Master.",
+        )
+    ]
+
+    blockers = _gate().master_reference_qc_blockers(project, reference)
+
+    assert any("framing_mismatch" in item for item in blockers)

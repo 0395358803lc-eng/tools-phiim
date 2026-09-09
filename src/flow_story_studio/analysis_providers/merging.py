@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from copy import deepcopy
@@ -10,7 +11,17 @@ from typing import Any
 
 from ..engines.analyzer import GENERIC_REFERENCE_NAMES
 from ..engines.prompt_generator import make_render_prompt, make_visual_prompt
-from ..models import Character, ContinuityState, Dialogue, Location, Project, Prop, StoryBible
+from ..models import (
+    AISemanticFact,
+    AISemanticProposal,
+    Character,
+    ContinuityState,
+    Dialogue,
+    Location,
+    Project,
+    Prop,
+    StoryBible,
+)
 from .finalization import finalize_project
 
 
@@ -148,6 +159,161 @@ def _resolve_reference(
     if best_id is not None and best_score >= threshold:
         return best_id
     return None
+
+
+def _semantic_fact_entity(
+    value: object,
+    *,
+    character_map: dict[str, str],
+    prop_map: dict[str, str],
+    location_map: dict[str, str],
+    characters: list[Character],
+    props: list[Prop],
+    locations: list[Location],
+) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return (
+        _resolve_reference(raw, character_map, characters)
+        or _resolve_reference(raw, prop_map, props)
+        or _resolve_reference(raw, location_map, locations)
+    )
+
+
+_AI_FACT_TYPE_ALIASES = {
+    "presence": "presence",
+    "present": "presence",
+    "physical_presence": "presence",
+    "absence": "absence",
+    "absent": "absence",
+    "non_presence": "absence",
+    "nonpresence": "absence",
+    "ownership": "ownership",
+    "owner": "ownership",
+    "possessor": "ownership",
+    "location": "location",
+    "position": "location",
+    "condition": "condition",
+    "state": "condition",
+    "part": "part",
+    "fragment": "part",
+    "event": "event",
+    "action": "event",
+    "scope": "scope",
+    "perceptual_scope": "scope",
+    "time": "time",
+    "temporal": "time",
+}
+
+
+def _normalize_ai_confidence(value: object) -> int:
+    if value is None or value == "":
+        return 100
+    raw = str(value).strip()
+    percent = raw.endswith("%")
+    if percent:
+        raw = raw[:-1].strip()
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return 100
+    if not percent and 0.0 <= numeric <= 1.0:
+        numeric *= 100.0
+    return max(0, min(100, round(numeric)))
+
+
+def _normalize_ai_fact_payload(
+    value: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str]:
+    safe = {key: field for key, field in value.items() if key in AISemanticFact.model_fields}
+    raw_type = _semantic_key(safe.get("fact_type", "")).replace(" ", "_")
+    normalized_type = _AI_FACT_TYPE_ALIASES.get(raw_type)
+    if not normalized_type:
+        return None, f"unsupported fact_type={value.get('fact_type')!r}"
+    safe["fact_type"] = normalized_type
+    safe["entity_id"] = str(safe.get("entity_id") or "").strip()
+    raw_value = safe.get("value", "")
+    if isinstance(raw_value, (dict, list, tuple, set)):
+        safe["value"] = json.dumps(raw_value, ensure_ascii=False, sort_keys=True)
+    else:
+        safe["value"] = str(raw_value or "").strip()
+    safe["evidence"] = str(safe.get("evidence") or "").strip()
+    safe["confidence"] = _normalize_ai_confidence(safe.get("confidence"))
+    return safe, ""
+
+
+def _sanitize_ai_semantic_proposal(
+    source_text: str,
+    raw: object,
+    *,
+    character_map: dict[str, str],
+    prop_map: dict[str, str],
+    location_map: dict[str, str],
+    characters: list[Character],
+    props: list[Prop],
+    locations: list[Location],
+) -> AISemanticProposal:
+    if not isinstance(raw, dict):
+        return AISemanticProposal()
+
+    source_key = _semantic_key(source_text)
+    accepted: list[AISemanticFact] = []
+    negatives: list[AISemanticFact] = []
+    rejected: list[AISemanticFact] = []
+    normalization_issues: list[str] = []
+    uncertainties = (
+        [str(value).strip() for value in raw.get("uncertainties", []) if str(value).strip()]
+        if isinstance(raw.get("uncertainties"), list)
+        else []
+    )
+
+    def consume(values: object, target: list[AISemanticFact]) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            safe, issue = _normalize_ai_fact_payload(value)
+            if safe is None:
+                normalization_issues.append(issue)
+                continue
+            try:
+                fact = AISemanticFact.model_validate(safe)
+            except (ValueError, TypeError) as exc:
+                normalization_issues.append(
+                    f"invalid semantic fact after normalization: {type(exc).__name__}"
+                )
+                continue
+            resolved = _semantic_fact_entity(
+                fact.entity_id,
+                character_map=character_map,
+                prop_map=prop_map,
+                location_map=location_map,
+                characters=characters,
+                props=props,
+                locations=locations,
+            )
+            if fact.entity_id and resolved is None:
+                rejected.append(fact)
+                continue
+            if resolved is not None:
+                fact.entity_id = resolved
+            evidence_key = _semantic_key(fact.evidence)
+            if not evidence_key or evidence_key not in source_key:
+                rejected.append(fact)
+                continue
+            target.append(fact)
+
+    consume(raw.get("facts"), accepted)
+    consume(raw.get("negative_facts"), negatives)
+    return AISemanticProposal(
+        facts=accepted,
+        negative_facts=negatives,
+        uncertainties=uncertainties,
+        rejected_facts=rejected,
+        normalization_issues=normalization_issues,
+    )
 
 
 def _canonicalize_reference_dict(
@@ -412,9 +578,7 @@ def _assert_production_invariants(project: Project) -> None:
                 raise ValueError(f"Invalid prop state in {scene.id}")
 
     prompts = [
-        scene.render_prompt.strip()
-        for scene in project.scenes
-        if scene.render_prompt.strip()
+        scene.render_prompt.strip() for scene in project.scenes if scene.render_prompt.strip()
     ]
     if len(prompts) != len(set(prompts)):
         raise ValueError("Duplicate render prompts detected before production")
@@ -579,6 +743,17 @@ def merge_analysis(draft: Project, data: dict[str, Any], model: str) -> Project:
                 scene.location_id = canonical_location_id
             else:
                 scene.location_id = draft_location_id
+        scene.ai_semantic_proposal = _sanitize_ai_semantic_proposal(
+            scene.source_text,
+            item.get("semantic_proposal"),
+            character_map=character_id_map,
+            prop_map=prop_id_map,
+            location_map=location_id_map,
+            characters=project.characters,
+            props=project.props,
+            locations=project.locations,
+        )
+
         try:
             if isinstance(item.get("dialogues"), list):
                 dialogues = []

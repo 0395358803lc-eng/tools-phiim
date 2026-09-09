@@ -58,3 +58,21 @@ Minh nhấc điện thoại và lắng nghe trong im lặng.
     assert scenes
     assert all("KỊCH BẢN" not in scene for scene in scenes)
     assert any("[SCENE CONTEXT] CẢNH 1" in scene for scene in scenes)
+
+
+def test_plain_title_metadata_is_not_converted_to_scene() -> None:
+    screenplay = """TARGET RUNTIME: 16 seconds
+TÊN PHIM: CHIẾC TỦ SỐ 17
+
+CẢNH 1 — SẢNH — ĐÊM
+Minh bước vào sảnh.
+
+CẢNH 2 — HÀNH LANG — ĐÊM
+Minh đi qua hành lang.
+"""
+    cleaned = narrative_text(screenplay)
+    scenes = segment_story(screenplay, 8)
+
+    assert "TÊN PHIM" not in cleaned
+    assert all("CHIẾC TỦ SỐ 17" not in scene for scene in scenes)
+    assert len([scene for scene in scenes if "[SCENE CONTEXT]" in scene]) == 2

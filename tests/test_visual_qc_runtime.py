@@ -210,3 +210,127 @@ async def test_continuity_qc_compares_boundary_frames(tmp_path: Path, monkeypatc
     assert report.model_id == "vision-selected"
     assert len(vision.calls[0][0]) == 2
     assert vision.calls[0][2] == "vision-selected"
+
+
+def test_master_issue_parser_drops_self_negating_findings_and_keeps_real_defects() -> None:
+    parsed = visual_qc._issues(
+        [
+            {
+                "code": "missing_spatial_anchor",
+                "severity": "error",
+                "message": (
+                    "The image satisfies this with a strong corridor axis. "
+                    "No additional anchors are required by the locked specification."
+                ),
+            },
+            {
+                "code": "layout_mismatch",
+                "severity": "error",
+                "message": (
+                    "The residential corridor layout is coherent. "
+                    "No apartment numbers are present, which is acceptable since none are named."
+                ),
+            },
+            {
+                "code": "transient_story_prop",
+                "severity": "error",
+                "message": (
+                    "No people or loose story props are visible. The fire extinguisher is a fixed "
+                    "building safety fixture, not a transient prop, and is correctly retained."
+                ),
+            },
+            {
+                "code": "readable_text",
+                "severity": "error",
+                "message": (
+                    "No readable signage is visible; the lower-right sparkle is a production "
+                    "watermark and must be stripped before downstream reuse."
+                ),
+            },
+            {
+                "code": "missing_spatial_anchor",
+                "severity": "error",
+                "message": (
+                    "Wall sconces are not explicitly enumerated in the locked spec; their presence "
+                    "is acceptable as ordinary fixed fixtures and should remain stable if reused."
+                ),
+            },
+            {
+                "code": "transient_story_prop",
+                "severity": "error",
+                "message": (
+                    "The window shows exterior building context. This is acceptable as a fixed "
+                    "architectural anchor, but weather and time-of-day must not be canonical."
+                ),
+            },
+            {
+                "code": "missing_spatial_anchor",
+                "severity": "error",
+                "message": (
+                    "The under-door clearance required by the locked specification is not clearly "
+                    "visible and must be restored."
+                ),
+            },
+            {
+                "code": "scene_specific_lighting",
+                "severity": "error",
+                "message": (
+                    "Ceiling fixtures are illuminated. This is acceptable as a Master baseline; "
+                    "however, downstream night scenes must override this state."
+                ),
+            },
+        ]
+    )
+
+    assert [item.code for item in parsed] == [
+        "watermark",
+        "missing_spatial_anchor",
+        "scene_specific_lighting",
+    ]
+    assert parsed[0].severity == "warning"
+    assert "under-door clearance" in parsed[1].message
+    assert "illuminated" in parsed[2].message
+
+
+def test_master_issue_parser_remaps_provider_watermark_regardless_of_issue_code() -> None:
+    parsed = visual_qc._issues(
+        [
+            {
+                "code": "transient_story_prop",
+                "severity": "error",
+                "message": (
+                    "Small diamond/sparkle graphic artifact in lower right corner appears to be "
+                    "a watermark or UI overlay, not a source-grounded element."
+                ),
+            }
+        ]
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0].code == "watermark"
+    assert parsed[0].severity == "warning"
+
+
+def test_master_issue_parser_drops_explicit_nonblocking_location_findings() -> None:
+    parsed = visual_qc._issues(
+        [
+            {
+                "code": "transient_story_prop",
+                "severity": "error",
+                "message": (
+                    "No transient story props, people, or readable display content are present. "
+                    "The blank panels are acceptable fixed fixtures. No blocking defect."
+                ),
+            },
+            {
+                "code": "missing_spatial_anchor",
+                "severity": "error",
+                "message": (
+                    "The fixed ticket counter and fixed luggage-locker anchors are present. "
+                    "The orientation cue is weak but acceptable as a lobby interior baseline."
+                ),
+            },
+        ]
+    )
+
+    assert parsed == []

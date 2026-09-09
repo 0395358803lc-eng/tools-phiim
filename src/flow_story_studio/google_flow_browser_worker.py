@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import re
 import shutil
@@ -9,6 +11,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from playwright.sync_api import (
@@ -92,6 +95,12 @@ def classify_flow_generation_failure(text: str) -> FlowGenerationFailure:
             detail="Phiên Google Flow không còn xác thực; cần đăng nhập lại.",
             retryable=False,
         )
+    if "the agent failed" in folded and "try again" in folded:
+        return FlowGenerationFailure(
+            code="agent_failed",
+            detail="Google Flow agent thất bại tạm thời và yêu cầu thử lại.",
+            retryable=True,
+        )
     if any(
         token in folded
         for token in (
@@ -139,10 +148,10 @@ class FlowVideoSettings:
 
 
 class GoogleFlowBrowserWorker:
-    """Drive Google Flow through the active isolated Chrome profile.
+    """Drive Google Flow through Chromium using an encrypted imported session.
 
-    This module intentionally uses the public browser UI only. It does not read
-    cookies, credentials or private Google APIs.
+    The worker still uses the public Google Flow browser UI. Authentication state is
+    supplied by GoogleFlowSessionManager and never returned through render APIs.
     """
 
     def __init__(
@@ -156,6 +165,10 @@ class GoogleFlowBrowserWorker:
         self.sessions = sessions
         self.data_root = data_root.resolve()
         self.debug_port = debug_port
+        self.external_cdp_url = os.getenv("TH_MEDIA_FLOW_CDP_URL", "").strip()
+        self.external_cdp_apply_imported_session = os.getenv(
+            "TH_MEDIA_FLOW_CDP_APPLY_IMPORTED_SESSION", ""
+        ).strip().lower() in {"1", "true", "yes"}
         configured_timeout = os.getenv("TH_MEDIA_FLOW_TIMEOUT_SECONDS", "").strip()
         self.generation_timeout_seconds = (
             generation_timeout_seconds
@@ -169,17 +182,88 @@ class GoogleFlowBrowserWorker:
             30.0,
             float(configured_guard_cooldown or 600),
         )
+        configured_generation_interval = os.getenv(
+            "TH_MEDIA_FLOW_MIN_GENERATION_INTERVAL_SECONDS", ""
+        ).strip()
+        self.min_generation_interval_seconds = max(
+            0.0,
+            float(configured_generation_interval or 90),
+        )
         self._generation_blocked_until = 0.0
         self._generation_block_reason = ""
-        self.staging_root = self.data_root / "browser-worker" / "staging"
+        self.worker_root = self.data_root / "browser-worker"
+        self.worker_root.mkdir(parents=True, exist_ok=True)
+        self._generation_circuit_path = self.worker_root / "generation-circuit.json"
+        self._generation_pacing_path = self.worker_root / "generation-pacing.json"
+        self._generation_pacing_lock_path = self.worker_root / "generation-pacing.lock"
+        self.staging_root = self.worker_root / "staging"
         self.staging_root.mkdir(parents=True, exist_ok=True)
 
     def configured(self) -> bool:
+        if self.external_cdp_url:
+            return True
         status = self.sessions.status()
         return bool(status.get("configured") and status.get("chrome_available"))
 
+    @staticmethod
+    def _valid_cdp_url(value: str) -> bool:
+        if not value:
+            return False
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https", "ws", "wss"} and bool(parsed.hostname)
+
+    def _browser_mode(self) -> str:
+        return "external_cdp" if self.external_cdp_url else "managed_server_chromium"
+
+    def _read_shared_generation_circuit(self) -> tuple[float, str]:
+        path = getattr(self, "_generation_circuit_path", None)
+        if path is None or not path.is_file():
+            return 0.0, ""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            blocked_until = float(payload.get("blocked_until_epoch") or 0.0)
+            reason = str(payload.get("reason") or "")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return 0.0, ""
+        if blocked_until <= time.time():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return 0.0, ""
+        return blocked_until, reason
+
+    def _write_shared_generation_circuit(self, blocked_until: float, reason: str) -> None:
+        path = getattr(self, "_generation_circuit_path", None)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        payload = {
+            "version": 1,
+            "blocked_until_epoch": blocked_until,
+            "reason": reason,
+            "updated_at_epoch": time.time(),
+        }
+        try:
+            tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _cooldown_remaining_seconds(self) -> int:
-        return max(0, int(self._generation_blocked_until - time.monotonic()))
+        local_remaining = max(
+            0,
+            int(getattr(self, "_generation_blocked_until", 0.0) - time.monotonic()),
+        )
+        shared_until, shared_reason = self._read_shared_generation_circuit()
+        shared_remaining = max(0, int(shared_until - time.time()))
+        if shared_remaining > local_remaining:
+            self._generation_block_reason = shared_reason
+        return max(local_remaining, shared_remaining)
 
     def _assert_generation_allowed(self) -> None:
         remaining = self._cooldown_remaining_seconds()
@@ -195,17 +279,159 @@ class GoogleFlowBrowserWorker:
     def _trip_generation_circuit(self, failure: FlowGenerationFailure) -> None:
         if failure.code != "account_guard":
             return
+        duration = self.account_guard_cooldown_seconds
         self._generation_blocked_until = max(
-            self._generation_blocked_until,
-            time.monotonic() + self.account_guard_cooldown_seconds,
+            getattr(self, "_generation_blocked_until", 0.0),
+            time.monotonic() + duration,
         )
         self._generation_block_reason = failure.code
 
+        shared_until, _shared_reason = self._read_shared_generation_circuit()
+        blocked_until = max(shared_until, time.time() + duration)
+        self._write_shared_generation_circuit(blocked_until, failure.code)
+
+    def _read_generation_pacing_state(self) -> dict[str, float]:
+        path = getattr(self, "_generation_pacing_path", None)
+        if path is None or not path.is_file():
+            return {
+                "last_generation_start_epoch": 0.0,
+                "last_generation_finish_epoch": 0.0,
+            }
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return {
+                "last_generation_start_epoch": max(
+                    0.0,
+                    float(payload.get("last_generation_start_epoch") or 0.0),
+                ),
+                "last_generation_finish_epoch": max(
+                    0.0,
+                    float(payload.get("last_generation_finish_epoch") or 0.0),
+                ),
+            }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return {
+                "last_generation_start_epoch": 0.0,
+                "last_generation_finish_epoch": 0.0,
+            }
+
+    def _write_generation_pacing_state(self, **updates: float) -> None:
+        path = getattr(self, "_generation_pacing_path", None)
+        if path is None:
+            return
+        state = self._read_generation_pacing_state()
+        for key, value in updates.items():
+            if key in state:
+                state[key] = max(0.0, float(value))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        payload = {
+            "version": 2,
+            **state,
+            "updated_at_epoch": time.time(),
+        }
+        try:
+            tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _read_last_generation_start_epoch(self) -> float:
+        return self._read_generation_pacing_state()["last_generation_start_epoch"]
+
+    def _read_last_generation_finish_epoch(self) -> float:
+        return self._read_generation_pacing_state()["last_generation_finish_epoch"]
+
+    def _write_last_generation_start_epoch(self, started_at: float) -> None:
+        self._write_generation_pacing_state(last_generation_start_epoch=started_at)
+
+    def _mark_generation_finished(self) -> None:
+        self._write_generation_pacing_state(last_generation_finish_epoch=time.time())
+
+    def _generation_pacing_remaining_seconds(self) -> int:
+        interval = max(
+            0.0,
+            float(getattr(self, "min_generation_interval_seconds", 0.0)),
+        )
+        if interval <= 0:
+            return 0
+        state = self._read_generation_pacing_state()
+        last_start = state["last_generation_start_epoch"]
+        last_finish = state["last_generation_finish_epoch"]
+        # Once a generation has finished, rest for the full interval from completion.
+        # While a generation is still active (start > finish), retain the old start-based
+        # guard so a second process cannot immediately submit another request.
+        anchor = last_finish if last_finish >= last_start else last_start
+        if anchor <= 0:
+            return 0
+        return max(0, math.ceil(anchor + interval - time.time()))
+
+    def _acquire_generation_pacing_lock(self, timeout_seconds: float = 30.0) -> int:
+        path = getattr(self, "_generation_pacing_lock_path", None)
+        if path is None:
+            return -1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + max(1.0, timeout_seconds)
+        while True:
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.write(fd, str(os.getpid()).encode("ascii", "ignore"))
+                return fd
+            except FileExistsError:
+                try:
+                    age = time.time() - path.stat().st_mtime
+                    if age > 120.0:
+                        path.unlink(missing_ok=True)
+                        continue
+                except OSError:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise GoogleFlowBrowserError(
+                        "[provider_busy] Không lấy được shared generation pacing lock"
+                    ) from None
+                time.sleep(0.1)
+
+    def _release_generation_pacing_lock(self, fd: int) -> None:
+        path = getattr(self, "_generation_pacing_lock_path", None)
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _wait_for_generation_slot(self) -> None:
+        self._assert_generation_allowed()
+        interval = max(0.0, float(getattr(self, "min_generation_interval_seconds", 0.0)))
+        if interval <= 0:
+            return
+        fd = self._acquire_generation_pacing_lock()
+        try:
+            while True:
+                self._assert_generation_allowed()
+                remaining = self._generation_pacing_remaining_seconds()
+                if remaining <= 0:
+                    break
+                time.sleep(min(1.0, float(remaining)))
+            self._assert_generation_allowed()
+            self._write_last_generation_start_epoch(time.time())
+        finally:
+            self._release_generation_pacing_lock(fd)
+
     def health(self) -> dict[str, object]:
-        status = self.sessions.status()
-        configured = bool(status.get("configured") and status.get("chrome_available"))
+        browser_mode = self._browser_mode()
+        configured = self.configured()
         ready = False
-        if configured:
+        if browser_mode == "external_cdp":
+            ready = self._valid_cdp_url(self.external_cdp_url)
+        elif configured:
             try:
                 ready = self.sessions.automation_browser_ready(self.debug_port)
             except BrowserSessionError:
@@ -214,10 +440,14 @@ class GoogleFlowBrowserWorker:
             "ok": configured,
             "configured": configured,
             "provider": "google-flow-browser",
+            "browser_mode": browser_mode,
+            "trusted_browser_transport": browser_mode == "external_cdp",
             "automation_ready": ready,
-            "debug_port": self.debug_port,
+            "debug_port": self.debug_port if browser_mode != "external_cdp" else None,
             "generation_cooldown_seconds": self._cooldown_remaining_seconds(),
             "generation_cooldown_reason": self._generation_block_reason,
+            "generation_min_interval_seconds": self.min_generation_interval_seconds,
+            "generation_pacing_remaining_seconds": self._generation_pacing_remaining_seconds(),
             "models": list(FLOW_VIDEO_MODELS),
             "image_models": list(FLOW_IMAGE_MODELS),
             "capabilities": {
@@ -231,9 +461,13 @@ class GoogleFlowBrowserWorker:
                 "max_single_clip_seconds": max(FLOW_VIDEO_DURATIONS),
             },
             "message": (
-                "Google Flow browser session sẵn sàng."
-                if configured
-                else "Chưa có Google Flow session active hoặc không tìm thấy Chrome."
+                "Trusted external Chrome transport đã cấu hình."
+                if browser_mode == "external_cdp" and configured
+                else (
+                    "Google Flow browser session sẵn sàng."
+                    if configured
+                    else "Chưa có Google Flow session active hoặc không tìm thấy Chrome."
+                )
             ),
         }
 
@@ -272,31 +506,103 @@ class GoogleFlowBrowserWorker:
         return page.locator(f'flow-grid-tile-container[aria-label="{escaped}"]')
 
     def _connect(self, playwright: Playwright) -> Browser:
+        if self.external_cdp_url:
+            if not self._valid_cdp_url(self.external_cdp_url):
+                raise GoogleFlowBrowserError(
+                    "TH_MEDIA_FLOW_CDP_URL không hợp lệ; chỉ chấp nhận http(s)/ws(s)"
+                )
+            try:
+                browser = playwright.chromium.connect_over_cdp(
+                    self.external_cdp_url,
+                    timeout=15_000,
+                )
+                if not browser.contexts:
+                    raise GoogleFlowBrowserError("Trusted external Chrome không có browser context")
+                if self.external_cdp_apply_imported_session:
+                    self.sessions.apply_session(browser)
+                return browser
+            except GoogleFlowBrowserError:
+                raise
+            except Exception as exc:
+                raise GoogleFlowBrowserError(
+                    "Không kết nối được Trusted external Chrome qua CDP"
+                ) from exc
+
         self.sessions.ensure_automation_browser(debug_port=self.debug_port)
         try:
-            return playwright.chromium.connect_over_cdp(
+            browser = playwright.chromium.connect_over_cdp(
                 f"http://127.0.0.1:{self.debug_port}",
                 timeout=15_000,
             )
+            self.sessions.apply_session(browser)
+            return browser
         except Exception as exc:
             raise GoogleFlowBrowserError(
                 f"Không kết nối được Chrome automation localhost:{self.debug_port}"
             ) from exc
 
-    @staticmethod
-    def _flow_page(browser: Browser) -> Page:
+    def _persist_runtime_session_best_effort(self, browser: Browser) -> None:
+        try:
+            self.sessions.persist_runtime_session(browser)
+        except BrowserSessionError:
+            # A completed provider asset must not be retried merely because the
+            # auxiliary encrypted session refresh failed.
+            return
+
+    def _flow_page(self, browser: Browser) -> Page:
         pages = [page for context in browser.contexts for page in context.pages]
         for page in pages:
             if "flow.google.com" in page.url:
+                if not self.external_cdp_url:
+                    self.sessions.install_proxy_auth(page)
                 return page
         if not browser.contexts:
             raise GoogleFlowBrowserError("Chrome automation không có browser context")
-        return browser.contexts[0].new_page()
+        page = browser.contexts[0].new_page()
+        if not self.external_cdp_url:
+            self.sessions.install_proxy_auth(page)
+        return page
 
     @staticmethod
     def _project_id_from_url(url: str) -> str:
         match = FLOW_PROJECT_RE.search(url)
         return match.group(1) if match else ""
+
+    @staticmethod
+    def _auth_required(page: Page) -> bool:
+        lower = page.url.lower()
+        return "accounts.google.com" in lower or "signin" in lower
+
+    def _enter_flow_app(self, page: Page) -> None:
+        if self._auth_required(page):
+            raise GoogleFlowBrowserError(
+                "GOOGLE_FLOW_AUTH_REQUIRED: Session chưa đăng nhập Google Flow app"
+            )
+        if "flow.google.com/about" not in page.url.lower():
+            return
+
+        candidates = (
+            "Create with Google Flow",
+            "Try Google Flow",
+            "Try in Google Flow",
+        )
+        entry = None
+        for label in candidates:
+            locator = page.get_by_role("button", name=label, exact=True)
+            if locator.count():
+                entry = locator.first
+                break
+        if entry is None:
+            raise GoogleFlowBrowserError(
+                "Không tìm thấy nút vào Google Flow app trên trang /about; UI có thể đã thay đổi"
+            )
+        entry.click()
+        page.wait_for_timeout(2200)
+        if self._auth_required(page):
+            raise GoogleFlowBrowserError(
+                "GOOGLE_FLOW_AUTH_REQUIRED: Cookie hiện tại chỉ mở được trang /about "
+                "nhưng Google yêu cầu đăng nhập khi vào Flow app"
+            )
 
     def _ensure_project(self, page: Page, project: Project) -> str:
         if project.provider_project_id:
@@ -306,6 +612,10 @@ class GoogleFlowBrowserWorker:
                 timeout=30_000,
             )
             page.wait_for_timeout(900)
+            if self._auth_required(page):
+                raise GoogleFlowBrowserError(
+                    "GOOGLE_FLOW_AUTH_REQUIRED: Session Google Flow đã hết hoặc thiếu cookie"
+                )
             project_id = self._project_id_from_url(page.url)
             if project_id == project.provider_project_id:
                 return project_id
@@ -313,12 +623,35 @@ class GoogleFlowBrowserWorker:
         page.goto(FLOW_HOME_URL, wait_until="domcontentloaded", timeout=30_000)
         page.wait_for_timeout(900)
         self._normalize(page)
+        self._enter_flow_app(page)
+        self._normalize(page)
+
+        project_id = self._project_id_from_url(page.url)
+        if project_id:
+            project.provider_project_id = project_id
+            return project_id
+
         new_project = page.get_by_role("button", name="New project", exact=True)
         if not new_project.count():
+            new_project = page.get_by_role("button", name="Create project", exact=True)
+        if not new_project.count():
+            new_project = page.get_by_role("button", name="Start new project", exact=True)
+        if not new_project.count():
+            visible = []
+            try:
+                visible = [
+                    (button.inner_text() or button.get_attribute("aria-label") or "").strip()
+                    for button in page.locator("button:visible").all()[:24]
+                ]
+            except Exception:
+                visible = []
+            detail = ", ".join(item for item in visible if item)[:500]
             raise GoogleFlowBrowserError(
-                "Không tìm thấy nút New project trên Google Flow; UI có thể đã thay đổi"
+                "Không tìm thấy nút New/Create project trên Google Flow app; "
+                "UI có thể đã thay đổi" + (f"; visible buttons: {detail}" if detail else "")
             )
-        new_project.click()
+
+        new_project.first.click()
         page.wait_for_url(re.compile(r".*/project/.*"), timeout=20_000)
         page.wait_for_timeout(700)
         project_id = self._project_id_from_url(page.url)
@@ -347,13 +680,19 @@ class GoogleFlowBrowserWorker:
 
     @staticmethod
     def _media_id_from_tile(tile: Locator) -> str:
-        media = tile.locator("[data-media-id]")
-        if media.count():
-            return media.first.get_attribute("data-media-id") or ""
-        # Flow has moved data-media-id between the media element and the tile
-        # container in past UI revisions. Accept either location without using
-        # presentation text (aria-label) as asset identity.
-        return tile.get_attribute("data-media-id") or ""
+        try:
+            media = tile.locator("[data-media-id]")
+            if media.count():
+                return media.first.get_attribute("data-media-id", timeout=750) or ""
+            # Flow has moved data-media-id between the media element and the tile
+            # container in past UI revisions. Accept either location without using
+            # presentation text (aria-label) as asset identity.
+            return tile.get_attribute("data-media-id", timeout=750) or ""
+        except PlaywrightError:
+            # The Flow grid is live-updated while generation completes. A tile can
+            # disappear between locator enumeration and attribute read. Treat such
+            # stale/transient DOM nodes as absent and let the caller continue scanning.
+            return ""
 
     def _wait_asset_tile(
         self,
@@ -405,6 +744,8 @@ class GoogleFlowBrowserWorker:
         while time.monotonic() < deadline:
             self._normalize(page)
             trigger = self._visible_button(page, aria="Settings trigger")
+            if not trigger.count():
+                trigger = self._visible_button(page, aria="Settings")
             if trigger.count() and trigger.first.is_visible():
                 return trigger.first
 
@@ -417,13 +758,15 @@ class GoogleFlowBrowserWorker:
                 except PlaywrightError:
                     page.wait_for_timeout(300)
                 trigger = self._visible_button(page, aria="Settings trigger")
+                if not trigger.count():
+                    trigger = self._visible_button(page, aria="Settings")
                 if trigger.count() and trigger.first.is_visible():
                     return trigger.first
 
             page.wait_for_timeout(350)
 
         raise GoogleFlowBrowserError(
-            "Không tìm thấy/chuyển được Google Flow sang Direct mode sau 15s"
+            "Không tìm thấy generation Settings của Google Flow sau 15s"
             + (f"; agent state: {last_state}" if last_state else "")
         )
 
@@ -433,6 +776,78 @@ class GoogleFlowBrowserWorker:
             raise GoogleFlowBrowserError(f"Google Flow không hỗ trợ tùy chọn {label}")
         radio.first.click()
         page.wait_for_timeout(100)
+
+    @staticmethod
+    def _settings_section(page: Page, label: str) -> Locator:
+        return page.locator("div.settings-section:visible", has_text=label)
+
+    def _select_scoped_radio(self, page: Page, scope: Locator, label: str) -> None:
+        radio = scope.locator('[role="radio"]:visible').filter(has_text=label)
+        if not radio.count():
+            raise GoogleFlowBrowserError(f"Google Flow Settings không hỗ trợ tùy chọn {label}")
+        radio.first.click()
+        page.wait_for_timeout(100)
+
+    def _select_model_from_button(
+        self,
+        page: Page,
+        selector: Locator,
+        model: str,
+    ) -> None:
+        if not selector.count():
+            raise GoogleFlowBrowserError("Không tìm thấy bộ chọn model Google Flow")
+        selector.first.click()
+        page.wait_for_timeout(160)
+        menuitems = page.locator('[role="menuitem"]:visible')
+        item = menuitems.filter(has_text=model)
+        if not item.count():
+            visible_names = [
+                (menuitems.nth(index).inner_text() or "").strip()
+                for index in range(min(menuitems.count(), 12))
+            ]
+            page.keyboard.press("Escape")
+            raise GoogleFlowBrowserError(
+                f"Model Google Flow không khả dụng: {model}; menu hiện có: {visible_names}"
+            )
+        item.first.click()
+        page.wait_for_timeout(140)
+
+    def _configure_agent_image_defaults(
+        self,
+        page: Page,
+        *,
+        model: str,
+        aspect_ratio: str,
+        outputs: int,
+    ) -> None:
+        confirm = self._settings_section(page, "Confirm before generating")
+        if confirm.count():
+            never = confirm.locator("mat-radio-button:visible").filter(has_text="Never")
+            if never.count():
+                classes = never.first.get_attribute("class") or ""
+                if "mat-mdc-radio-checked" not in classes:
+                    never.first.click()
+                    page.wait_for_timeout(100)
+
+        section = self._settings_section(page, "Image generation default")
+        if not section.count():
+            raise GoogleFlowBrowserError(
+                "Không tìm thấy Image generation default trong Google Flow Settings"
+            )
+        self._select_scoped_radio(page, section.first, aspect_ratio)
+        self._select_scoped_radio(page, section.first, f"x{outputs}")
+        model_button = section.first.get_by_role(
+            "button",
+            name="Image generation default model",
+            exact=True,
+        )
+        self._select_model_from_button(page, model_button, model)
+
+        save = page.get_by_role("button", name="Save", exact=True)
+        if not save.count():
+            raise GoogleFlowBrowserError("Không tìm thấy nút Save trong Google Flow Settings")
+        save.first.click()
+        page.wait_for_timeout(300)
 
     def _select_model(self, page: Page, model: str) -> None:
         selector = page.locator('button[aria-label="Select model family"]:visible')
@@ -452,8 +867,7 @@ class GoogleFlowBrowserWorker:
             ]
             page.keyboard.press("Escape")
             raise GoogleFlowBrowserError(
-                f"Model Google Flow không khả dụng: {model}; "
-                f"menu hiện có: {visible_names}"
+                f"Model Google Flow không khả dụng: {model}; menu hiện có: {visible_names}"
             )
         item.first.click()
         page.wait_for_timeout(120)
@@ -514,7 +928,18 @@ class GoogleFlowBrowserWorker:
             raise GoogleFlowBrowserError(f"Image model chưa được map: {model}")
         trigger = self._ensure_direct_mode(page)
         trigger.click()
-        page.wait_for_timeout(160)
+        page.wait_for_timeout(400)
+
+        agent_image_section = self._settings_section(page, "Image generation default")
+        if agent_image_section.count():
+            self._configure_agent_image_defaults(
+                page,
+                model=model,
+                aspect_ratio=aspect_ratio,
+                outputs=outputs,
+            )
+            return
+
         self._select_radio(page, "Image")
         self._select_radio(page, aspect_ratio)
         self._select_radio(page, f"x{outputs}")
@@ -627,6 +1052,10 @@ class GoogleFlowBrowserWorker:
         start = self._visible_button(page, aria="Start generation")
         if not start.count() or start.first.is_disabled():
             raise GoogleFlowBrowserError("Start generation chưa sẵn sàng")
+        self._wait_for_generation_slot()
+        start = self._visible_button(page, aria="Start generation")
+        if not start.count() or start.first.is_disabled():
+            raise GoogleFlowBrowserError("Start generation không còn sẵn sàng sau pacing wait")
         start.first.click()
         page.wait_for_timeout(500)
         dialogs = page.locator('[role="dialog"]:visible')
@@ -651,19 +1080,34 @@ class GoogleFlowBrowserWorker:
     def _generation_pending(page: Page) -> bool:
         pending = page.locator(
             "flow-pending-tile:visible, .loading-percentage:visible, "
-            ".progress-bar:visible, button[aria-label=\"Stop\"]:visible"
+            '.progress-bar:visible, button[aria-label="Stop"]:visible'
         )
         return bool(pending.count())
 
     @staticmethod
     def _error_fingerprints(page: Page) -> tuple[str, ...]:
         errors = page.locator(
-            ".error-tile-content:visible, [data-status=\"failed\"]:visible, "
-            "[data-state=\"failed\"]:visible, [class*=\"generation-error\"]:visible"
+            '.error-tile-content:visible, [data-status="failed"]:visible, '
+            '[data-state="failed"]:visible, [class*="generation-error"]:visible'
         )
         values: list[str] = []
         for index in range(errors.count()):
             item = errors.nth(index)
+            try:
+                if not item.is_visible():
+                    continue
+                text = " ".join((item.inner_text() or "").split())
+            except PlaywrightError:
+                continue
+            if text:
+                values.append(text[:700])
+
+        agent_failures = page.get_by_text(
+            "The agent failed. Please try again.",
+            exact=True,
+        )
+        for index in range(agent_failures.count()):
+            item = agent_failures.nth(index)
             try:
                 if not item.is_visible():
                     continue
@@ -709,9 +1153,7 @@ class GoogleFlowBrowserWorker:
             if error_text:
                 failure = classify_flow_generation_failure(error_text)
                 self._trip_generation_circuit(failure)
-                raise GoogleFlowBrowserError(
-                    f"[{failure.code}] {failure.detail}"
-                )
+                raise GoogleFlowBrowserError(f"[{failure.code}] {failure.detail}")
             pending_observed = pending_observed or self._generation_pending(page)
             page.wait_for_timeout(300)
         current_media_ids = self._tile_media_ids(tiles)
@@ -752,8 +1194,7 @@ class GoogleFlowBrowserWorker:
                 failure = classify_flow_generation_failure(detail)
                 self._trip_generation_circuit(failure)
                 raise GoogleFlowBrowserError(
-                    f"[{failure.code}] Google Flow {kind} generation thất bại: "
-                    f"{failure.detail}"
+                    f"[{failure.code}] Google Flow {kind} generation thất bại: {failure.detail}"
                 )
             if not progress.count():
                 pending_overlay = tile.locator(
@@ -787,9 +1228,7 @@ class GoogleFlowBrowserWorker:
         click_deadline = time.monotonic() + hotbar_timeout
         last_error = ""
         while time.monotonic() < click_deadline:
-            pending_overlay = tile.locator(
-                "flow-pending-tile:visible, .loading-percentage:visible"
-            )
+            pending_overlay = tile.locator("flow-pending-tile:visible, .loading-percentage:visible")
             if pending_overlay.count():
                 page.wait_for_timeout(350)
                 continue
@@ -852,19 +1291,13 @@ class GoogleFlowBrowserWorker:
                 f"Scene {target_seconds}s vượt giới hạn 10s của một Google Flow clip; "
                 "cần subclip planner trước khi render."
             )
-        return next(
-            duration
-            for duration in FLOW_VIDEO_DURATIONS
-            if duration >= target_seconds
-        )
+        return next(duration for duration in FLOW_VIDEO_DURATIONS if duration >= target_seconds)
 
     @staticmethod
     def _trim_video(target: Path, duration_seconds: int) -> None:
         ffmpeg = ffmpeg_path()
         if not ffmpeg:
-            raise GoogleFlowBrowserError(
-                "Cần FFmpeg để trim Flow clip về đúng duration scene."
-            )
+            raise GoogleFlowBrowserError("Cần FFmpeg để trim Flow clip về đúng duration scene.")
         temporary = target.with_name(f".{target.stem}-trim{target.suffix}")
         command = [
             ffmpeg,
@@ -947,9 +1380,13 @@ class GoogleFlowBrowserWorker:
         temporary = target.with_name(f".{target.stem}-subclips{target.suffix}")
         manifest_lines: list[str] = []
         for part in parts:
-            escaped = part.resolve().as_posix().replace(
-                chr(39),
-                chr(39) + chr(92) + chr(39) + chr(39),
+            escaped = (
+                part.resolve()
+                .as_posix()
+                .replace(
+                    chr(39),
+                    chr(39) + chr(92) + chr(39) + chr(39),
+                )
             )
             manifest_lines.append(f"file '{escaped}'")
         manifest.write_text(
@@ -1061,27 +1498,30 @@ class GoogleFlowBrowserWorker:
         previous_errors = self._error_fingerprints(page)
         self._fill_prompt(page, prompt)
         self._submit(page)
-        tile = self._wait_new_tile(
-            page,
-            kind="video",
-            previous_media_ids=previous_media_ids,
-            previous_error_fingerprints=previous_errors,
-        )
-        tile = self._wait_completed_tile(page, tile, kind="video")
-        label = tile.get_attribute("aria-label") or part_token
-        media_id = self._media_id_from_tile(tile) or uuid4().hex
-        target = (
-            self.data_root
-            / "renders"
-            / project.id
-            / "subclips"
-            / scene.id
-            / f"{part_token}.mp4"
-        )
-        self._download_tile(page, tile, target=target, kind="video")
-        if flow_duration > semantic_duration:
-            self._trim_video(target, semantic_duration)
-        return target, media_id, label
+        try:
+            tile = self._wait_new_tile(
+                page,
+                kind="video",
+                previous_media_ids=previous_media_ids,
+                previous_error_fingerprints=previous_errors,
+            )
+            tile = self._wait_completed_tile(page, tile, kind="video")
+            label = tile.get_attribute("aria-label") or part_token
+            media_id = self._media_id_from_tile(tile) or uuid4().hex
+            target = (
+                self.data_root
+                / "renders"
+                / project.id
+                / "subclips"
+                / scene.id
+                / f"{part_token}.mp4"
+            )
+            self._download_tile(page, tile, target=target, kind="video")
+            if flow_duration > semantic_duration:
+                self._trim_video(target, semantic_duration)
+            return target, media_id, label
+        finally:
+            self._mark_generation_finished()
 
     def _generate_subclipped_video(
         self,
@@ -1170,10 +1610,11 @@ class GoogleFlowBrowserWorker:
             browser = self._connect(playwright)
             page = self._flow_page(browser)
             project_id = self._ensure_project(page, project)
+            self._persist_runtime_session_best_effort(browser)
 
             if scene.duration > 10:
                 plans = plan_flow_subclips(scene)
-                return self._generate_subclipped_video(
+                asset = self._generate_subclipped_video(
                     page,
                     project,
                     scene,
@@ -1181,6 +1622,8 @@ class GoogleFlowBrowserWorker:
                     start_source=start_source,
                     target_source=target_source,
                 )
+                self._persist_runtime_session_best_effort(browser)
+                return asset
 
             model = project.settings.video_model or "Veo 3.1 - Lite [Lower Priority]"
             flow_duration = self._flow_duration(scene.duration)
@@ -1240,31 +1683,35 @@ class GoogleFlowBrowserWorker:
                 prompt = f"{prompt}\n\nQC REPAIR INSTRUCTION:\n{scene.runtime_repair_instruction}"
             self._fill_prompt(page, prompt)
             self._submit(page)
-            tile = self._wait_new_tile(
-                page,
-                kind="video",
-                previous_media_ids=previous_media_ids,
-                previous_error_fingerprints=previous_errors,
-            )
-            tile = self._wait_completed_tile(page, tile, kind="video")
-            label = tile.get_attribute("aria-label") or f"{scene.id}-video"
-            media_id = self._media_id_from_tile(tile) or uuid4().hex
-            target = self.data_root / "renders" / project.id / f"{scene.id}.mp4"
-            self._download_tile(page, tile, target=target, kind="video")
-            if flow_duration > scene.duration:
-                self._trim_video(target, scene.duration)
-            source_url = ""
-            video = tile.locator("video")
-            if video.count():
-                source_url = video.first.get_attribute("src") or ""
-            return FlowAsset(
-                project_id=project_id,
-                media_id=media_id,
-                label=label,
-                kind="video",
-                result_file=self._relative_file(target),
-                source_url=source_url,
-            )
+            try:
+                tile = self._wait_new_tile(
+                    page,
+                    kind="video",
+                    previous_media_ids=previous_media_ids,
+                    previous_error_fingerprints=previous_errors,
+                )
+                tile = self._wait_completed_tile(page, tile, kind="video")
+                label = tile.get_attribute("aria-label") or f"{scene.id}-video"
+                media_id = self._media_id_from_tile(tile) or uuid4().hex
+                target = self.data_root / "renders" / project.id / f"{scene.id}.mp4"
+                self._download_tile(page, tile, target=target, kind="video")
+                if flow_duration > scene.duration:
+                    self._trim_video(target, scene.duration)
+                source_url = ""
+                video = tile.locator("video")
+                if video.count():
+                    source_url = video.first.get_attribute("src") or ""
+                self._persist_runtime_session_best_effort(browser)
+                return FlowAsset(
+                    project_id=project_id,
+                    media_id=media_id,
+                    label=label,
+                    kind="video",
+                    result_file=self._relative_file(target),
+                    source_url=source_url,
+                )
+            finally:
+                self._mark_generation_finished()
 
     def generate_image(
         self,
@@ -1280,6 +1727,7 @@ class GoogleFlowBrowserWorker:
             browser = self._connect(playwright)
             page = self._flow_page(browser)
             project_id = self._ensure_project(page, project)
+            self._persist_runtime_session_best_effort(browser)
             self._clear_generation_inputs(page)
             self._configure_image(
                 page,
@@ -1299,32 +1747,32 @@ class GoogleFlowBrowserWorker:
             previous_errors = self._error_fingerprints(page)
             self._fill_prompt(page, prompt)
             self._submit(page)
-            tile = self._wait_new_tile(
-                page,
-                kind="image",
-                previous_media_ids=previous_media_ids,
-                previous_error_fingerprints=previous_errors,
-            )
-            tile = self._wait_completed_tile(page, tile, kind="image")
-            label = tile.get_attribute("aria-label") or output_token
-            media_id = self._media_id_from_tile(tile) or uuid4().hex
-            target = (
-                self.data_root
-                / "references"
-                / project.id
-                / "generated"
-                / f"{output_token}.jpg"
-            )
-            self._download_tile(page, tile, target=target, kind="image")
-            source_url = ""
-            image = tile.locator("img")
-            if image.count():
-                source_url = image.first.get_attribute("src") or ""
-            return FlowAsset(
-                project_id=project_id,
-                media_id=media_id,
-                label=label,
-                kind="image",
-                result_file=self._relative_file(target),
-                source_url=source_url,
-            )
+            try:
+                tile = self._wait_new_tile(
+                    page,
+                    kind="image",
+                    previous_media_ids=previous_media_ids,
+                    previous_error_fingerprints=previous_errors,
+                )
+                tile = self._wait_completed_tile(page, tile, kind="image")
+                label = tile.get_attribute("aria-label") or output_token
+                media_id = self._media_id_from_tile(tile) or uuid4().hex
+                target = (
+                    self.data_root / "references" / project.id / "generated" / f"{output_token}.jpg"
+                )
+                self._download_tile(page, tile, target=target, kind="image")
+                source_url = ""
+                image = tile.locator("img")
+                if image.count():
+                    source_url = image.first.get_attribute("src") or ""
+                self._persist_runtime_session_best_effort(browser)
+                return FlowAsset(
+                    project_id=project_id,
+                    media_id=media_id,
+                    label=label,
+                    kind="image",
+                    result_file=self._relative_file(target),
+                    source_url=source_url,
+                )
+            finally:
+                self._mark_generation_finished()

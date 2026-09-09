@@ -23,6 +23,18 @@ def test_responsive_workspace_assets_are_embedded(tmp_path: Path) -> None:
     assert 'setWorkspaceView("editor")' in script.text
     assert 'id="workspacePath"' in index.text
     assert 'id="videoSetupModal"' in index.text
+    assert 'id="productionSettingsBtn"' in index.text
+    assert 'id="productionSettingsModal"' in index.text
+    assert 'id="productionXKiroKeyInput"' in index.text
+    assert 'type="password"' in index.text
+    assert 'id="saveProductionXKiroKeyBtn"' in index.text
+    assert 'id="clearProductionXKiroKeyBtn"' in index.text
+    assert 'id="productionXKiroStatus"' in index.text
+    assert "async function openProductionSettings()" in script.text
+    assert "async function saveProductionXKiroKey()" in script.text
+    assert "async function clearProductionXKiroKey()" in script.text
+    assert '"/api/ai/xkiro/connect"' in script.text
+    assert '"/api/ai/xkiro/status"' in script.text
     assert 'id="xkiroCredentialEditor"' in index.text
     assert 'id="analysisModelInput"' in index.text
     assert 'id="visionModelInput"' in index.text
@@ -34,12 +46,28 @@ def test_responsive_workspace_assets_are_embedded(tmp_path: Path) -> None:
     assert 'id="renderConnection"' in index.text
     assert 'id="googleFlowStatus"' in index.text
     assert 'id="googleFlowSessionModal"' in index.text
-    assert 'id="newGoogleFlowSessionBtn"' in index.text
-    assert 'id="activateGoogleFlowPendingBtn"' in index.text
+    assert 'id="importGoogleAccountSessionBtn"' in index.text
+    assert 'id="googleAccountSessionInput"' in index.text
+    assert 'id="importGoogleFlowSessionBtn"' in index.text
+    assert 'id="googleFlowSessionInput"' in index.text
+    assert 'id="validateGoogleFlowSessionBtn"' in index.text
+    assert 'id="googleFlowProxyServer"' in index.text
+    assert 'id="googleFlowProxyUsername"' in index.text
+    assert 'id="googleFlowProxyPassword"' in index.text
+    assert 'id="saveGoogleFlowProxyBtn"' in index.text
+    assert 'id="clearGoogleFlowProxyBtn"' in index.text
+    assert 'id="googleFlowProxyError"' in index.text
     assert "function renderGoogleFlowSessionStatus(status)" in script.text
-    assert "async function createGoogleFlowSession()" in script.text
-    assert "/api/google-flow/session/new" in script.text
+    assert "async function importGoogleAccountSession()" in script.text
+    assert "async function importGoogleFlowSession()" in script.text
+    assert "async function saveGoogleFlowProxy()" in script.text
+    assert "async function clearGoogleFlowProxy()" in script.text
+    assert "/api/google-flow/session/google-account/import" in script.text
+    assert "/api/google-flow/session/flow/import" in script.text
+    assert "/api/google-flow/session/proxy" in script.text
     assert ".flow-session-meta" in styles.text
+    assert ".flow-session-source-card" in styles.text
+    assert ".flow-proxy-auth-row" in styles.text
     assert "Thêm mới / Thay đổi" in script.text
     assert "function setXKiroCredentialEditor(open)" in script.text
     assert "function loadRenderStatus()" in script.text
