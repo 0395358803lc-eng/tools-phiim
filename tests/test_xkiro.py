@@ -846,3 +846,64 @@ def test_vision_settings_route_saves_valid_vision_model_without_500(tmp_path: Pa
         saved = test_client.get(f"/api/projects/{project.id}")
         assert saved.status_code == 200
         assert saved.json()["settings"]["vision_model"] == "openai/test-paid"
+
+
+@pytest.mark.asyncio
+async def test_xkiro_reduces_future_batch_size_after_major_partial_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("XKIRO_SCENE_BATCH_SIZE", "6")
+    requested_sizes: list[int] = []
+    first_multi_batch = True
+
+    def partial_first_batch(_request: httpx.Request, body: dict) -> httpx.Response | None:
+        nonlocal first_multi_batch
+        prompt = body["messages"][-1]["content"]
+        if "SCENES TO RETURN" not in prompt:
+            return None
+        ids = requested_scene_ids(prompt)
+        requested_sizes.append(len(ids))
+        if first_multi_batch and len(ids) > 1:
+            first_multi_batch = False
+            payload = {"scenes": [scene_result(ids[0])]}
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(payload),
+                            }
+                        }
+                    ]
+                },
+            )
+        return None
+
+    request = AnalyzeRequest(
+        name="Adaptive scene batching",
+        original_text=" ".join(
+            f"Sau đó cô gái thực hiện hành động thứ {index} trong căn phòng."
+            for index in range(1, 13)
+        ),
+        settings=VideoSettings(
+            scene_duration=8,
+            analysis_provider="xkiro",
+            analysis_model="qwen/test-free",
+        ),
+    )
+    client = XKiroClient(
+        transport=transport(partial_first_batch),
+        checkpoint_root=tmp_path / "analysis-checkpoints",
+    )
+    await client.connect("sk-xt-valid")
+    logs: list[tuple[str, str]] = []
+    project = await client.analyze(
+        request,
+        progress=lambda message, level: logs.append((level, message)),
+    )
+
+    assert len(project.scenes) == 12
+    assert [size for size in requested_sizes if size > 1] == [6, 3, 3]
+    assert any("Adaptive scene batching" in message for _, message in logs)
