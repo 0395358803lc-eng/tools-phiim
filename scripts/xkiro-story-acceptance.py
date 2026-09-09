@@ -464,6 +464,19 @@ def audit_project(
                         f"{scene.id} direct start state lacks direct-continuation note",
                         number,
                     )
+                exact_anchor = scene.semantic_truth.frame_anchor == "previous_final_frame"
+                if exact_anchor and "may anchor" not in start_notes.casefold():
+                    error(
+                        "STATE_DEPENDENCY_NOTE",
+                        f"{scene.id} exact direct boundary lacks previous-frame authorization",
+                        number,
+                    )
+                if not exact_anchor and "canonical" not in start_notes.casefold():
+                    error(
+                        "STATE_DEPENDENCY_NOTE",
+                        f"{scene.id} non-exact direct boundary lacks canonical re-composition note",
+                        number,
+                    )
             elif dependency_mode == "canonical":
                 if "Canonical cut/new beat" not in start_notes:
                     error(
@@ -477,14 +490,19 @@ def audit_project(
                 next_mode = next_scene.visual_plan.dependency_mode
                 end_notes = scene.end_state.notes
                 if next_mode == "direct":
+                    next_exact = next_scene.semantic_truth.frame_anchor == "previous_final_frame"
+                    note = end_notes.casefold()
                     if (
                         next_scene.id not in end_notes
-                        or "direct continuation" not in end_notes.casefold()
-                        or "may anchor" not in end_notes.casefold()
+                        or "direct continuation" not in note
+                        or (next_exact and "may anchor" not in note)
+                        or (not next_exact and "canonical" not in note)
+                        or (not next_exact and "may anchor" in note)
                     ):
                         error(
                             "STATE_DEPENDENCY_NOTE",
-                            f"{scene.id} end state does not authorize only the next direct scene",
+                            f"{scene.id} end state does not describe the next "
+                            "direct boundary correctly",
                             number,
                         )
                 else:

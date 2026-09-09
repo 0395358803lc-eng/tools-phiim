@@ -58,7 +58,15 @@ def compile_scene_image_plan(
         if item.status != "approved" or not item.approved_reference
     ]
 
-    direct = scene.visual_plan.dependency_mode == "direct" and previous is not None
+    # Narrative directness and exact pixel/frame anchoring are independent.
+    # A screenplay can be CONTINUOUS while the authored entry beat introduces a new
+    # composition/object, in which case we preserve dependency=direct but re-anchor
+    # visually from canonical masters instead of inventing an exact-frame carry.
+    direct = (
+        scene.visual_plan.dependency_mode == "direct"
+        and scene.semantic_truth.frame_anchor == "previous_final_frame"
+        and previous is not None
+    )
     previous_frame = _best_previous_end_frame(previous)
     if direct:
         start_strategy = "previous_accepted_end_frame"

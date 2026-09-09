@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .engines.continuity import enforce_frame_anchor_policy
+from .engines.continuity import enforce_frame_anchor_policy, is_direct_frame_anchor
 from .film.canonical import DependencyMode
 from .film.dependency import classify_dependency
 from .film.image_plan import compile_project_image_plans
@@ -217,6 +217,18 @@ def _prop_lock(item) -> str:
 def build_visual_bible(project: Project) -> Project:
     project = prepare(project)
     project = enforce_frame_anchor_policy(project)
+
+    # Frame-anchor eligibility must be recomputed after deterministic boundary
+    # reconciliation. Narrative dependency remains independent.
+    previous_scene = None
+    for scene in project.scenes:
+        scene.semantic_truth.frame_anchor = (
+            "previous_final_frame"
+            if is_direct_frame_anchor(previous_scene, scene)
+            else "canonical_master"
+        )
+        previous_scene = scene
+
     existing = {item.entity_id: item for item in project.visual_bible.references}
     refs: list[VisualReference] = []
     for item in project.characters:
@@ -350,10 +362,17 @@ def build_visual_bible(project: Project) -> Project:
 
         next_scene = project.scenes[index + 1]
         if next_scene.visual_plan.dependency_mode == "direct":
-            boundary_note = (
-                f"Direct continuation from {scene.id}; {next_scene.id} may anchor to this "
-                "accepted final frame as the physical-state anchor."
-            )
+            if next_scene.semantic_truth.frame_anchor == "previous_final_frame":
+                boundary_note = (
+                    f"Direct continuation from {scene.id}; {next_scene.id} may anchor to this "
+                    "accepted final frame as the exact physical-state anchor."
+                )
+            else:
+                boundary_note = (
+                    f"Direct continuation from {scene.id}; preserve narrative/temporal continuity "
+                    f"into {next_scene.id}, but source-grounded entry state requires canonical "
+                    "re-composition rather than exact previous-frame reuse."
+                )
         else:
             boundary_note = (
                 f"{next_scene.id} begins as a Canonical cut/new beat; re-anchor to source "

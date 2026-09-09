@@ -17,6 +17,8 @@ from .analysis_providers.source_truth import (
 )
 from .engines.continuity import is_direct_frame_anchor
 from .film.beat_integrity import duplicate_scene_pairs
+from .film.canonical import DependencyMode
+from .film.dependency import classify_dependency
 from .models import Project, SemanticReadinessReport
 
 _DIMENSIONS = (
@@ -32,6 +34,7 @@ _DIMENSIONS = (
     "perceptual_scope",
     "ai_source_agreement",
     "narrative_continuity",
+    "dependency_alignment",
     "frame_anchor",
     "source_traceability",
 )
@@ -207,10 +210,19 @@ def _physical_presence_blockers(project: Project) -> list[str]:
                 and not prop_physically_mentioned(scene, prop)
                 and truth.narrative_transition not in {"continuous"}
             ):
-                blockers.append(
-                    f"{scene.id}: {prop_id} exists in canonical re-anchor "
-                    "without physical source evidence"
-                )
+                states = [
+                    state
+                    for state in (
+                        truth.entry_props.get(prop_id),
+                        truth.exit_props.get(prop_id),
+                    )
+                    if state is not None
+                ]
+                if any(state.visibility == "visible" for state in states):
+                    blockers.append(
+                        f"{scene.id}: {prop_id} exists visibly in canonical re-anchor "
+                        "without physical source evidence"
+                    )
     return blockers
 
 
@@ -298,20 +310,26 @@ def _source_action_blockers(project: Project) -> list[str]:
         events = scene.semantic_truth.prop_events
         actions = {event.action for event in events}
         has_corner_tear = any(
-            re.search(r"\bxe\b.{0,64}\b(?:goc|corner)\b", sentence)
-            or re.search(
-                r"\b(?:tear|tears|rip|rips)\b.{0,64}\bcorner\b",
-                sentence,
+            tracked_action_sentence(raw_sentence)
+            and (
+                re.search(r"\bxe\b.{0,64}\b(?:goc|corner)\b", sentence)
+                or re.search(
+                    r"\b(?:tear|tears|rip|rips)\b.{0,64}\bcorner\b",
+                    sentence,
+                )
             )
-            for sentence in source_sentences
+            for sentence, raw_sentence in zip(source_sentences, raw_sentences, strict=True)
         )
         has_split_tear = any(
-            re.search(r"\bxe\b.{0,64}\b(?:lam doi|thanh hai)\b", sentence)
-            or re.search(
-                r"\b(?:tear|tears|rip|rips)\b.{0,64}\b(?:in half|in two|apart)\b",
-                sentence,
+            tracked_action_sentence(raw_sentence)
+            and (
+                re.search(r"\bxe\b.{0,64}\b(?:lam doi|thanh hai)\b", sentence)
+                or re.search(
+                    r"\b(?:tear|tears|rip|rips)\b.{0,64}\b(?:in half|in two|apart)\b",
+                    sentence,
+                )
             )
-            for sentence in source_sentences
+            for sentence, raw_sentence in zip(source_sentences, raw_sentences, strict=True)
         )
         if has_corner_tear and not any(
             event.action == "tear" and event.target_condition == "missing_right_corner"
@@ -445,6 +463,25 @@ def _perceptual_scope_blockers(project: Project) -> list[str]:
     return blockers
 
 
+def _dependency_alignment_blockers(project: Project) -> list[str]:
+    """Validate authored narrative dependency independently from boundary state."""
+    blockers: list[str] = []
+    previous = None
+    for scene in project.scenes:
+        expected = classify_dependency(previous, scene)
+        actual = scene.visual_plan.dependency_mode
+        if expected == DependencyMode.DIRECT and actual != "direct":
+            blockers.append(
+                f"{scene.id}: authored continuous dependency was downgraded to {actual}"
+            )
+        elif expected != DependencyMode.DIRECT and actual == "direct":
+            blockers.append(
+                f"{scene.id}: direct dependency is not supported by authored scene context"
+            )
+        previous = scene
+    return blockers
+
+
 def _frame_anchor_blockers(project: Project) -> list[str]:
     blockers: list[str] = []
     previous = None
@@ -488,6 +525,7 @@ def evaluate_semantic_readiness(project: Project) -> SemanticReadinessReport:
     by_dimension["part_identity"].extend(_part_identity_blockers(project))
     by_dimension["perceptual_scope"].extend(_perceptual_scope_blockers(project))
     by_dimension["ai_source_agreement"].extend(_ai_source_agreement_blockers(project))
+    by_dimension["dependency_alignment"].extend(_dependency_alignment_blockers(project))
     by_dimension["frame_anchor"].extend(_frame_anchor_blockers(project))
     by_dimension["source_traceability"].extend(_source_trace_blockers(project))
 

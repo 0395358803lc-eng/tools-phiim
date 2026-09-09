@@ -1,7 +1,7 @@
 """Fail-closed scene dependency classification."""
 from __future__ import annotations
 
-from ..engines.continuity import is_direct_continuation, is_direct_frame_anchor
+from ..engines.continuity import is_direct_continuation
 from ..models import Scene
 from .canonical import DependencyMode
 
@@ -20,9 +20,11 @@ def classify_dependency(previous: Scene | None, current: Scene) -> DependencyMod
         return DependencyMode.PARALLEL
     if _has_time_jump(previous, current):
         return DependencyMode.TIME_JUMP
+    # Narrative dependency is authored by the screenplay. Exact previous-frame
+    # reuse is a separate visual decision handled by is_direct_frame_anchor().
+    # Never downgrade an authored continuous beat to a canonical cut merely because
+    # the current boundary state still needs reconciliation.
     if not is_direct_continuation(previous, current):
-        return DependencyMode.CANONICAL
-    if not is_direct_frame_anchor(previous, current):
         return DependencyMode.CANONICAL
     return DependencyMode.DIRECT
 

@@ -98,16 +98,52 @@ def scene_warnings(previous: Scene | None, current: Scene, project: Project) -> 
     if current.location_id not in location_ids:
         warnings.append(f"Location {current.location_id} chưa có trong Bible")
     if is_direct_continuation(previous, current):
-        if previous.end_state.time != current.start_state.time:
-            warnings.append("Mốc thời gian đầu cảnh không khớp trạng thái cuối cảnh trước")
-        for char_id, position in previous.end_state.character_positions.items():
-            next_position = current.start_state.character_positions.get(char_id)
-            if next_position and next_position != position:
-                warnings.append(f"{char_id} đổi vị trí mà chưa có diễn biến chuyển tiếp")
-        for prop_id, position in previous.end_state.prop_positions.items():
-            next_position = current.start_state.prop_positions.get(prop_id)
-            if next_position and next_position != position:
-                warnings.append(f"{prop_id} đổi vị trí giữa hai cảnh")
+        exact_frame = current.semantic_truth.frame_anchor == "previous_final_frame"
+        if exact_frame:
+            if previous.end_state.time != current.start_state.time:
+                warnings.append("Mốc thời gian đầu cảnh không khớp trạng thái cuối cảnh trước")
+            for char_id, position in previous.end_state.character_positions.items():
+                next_position = current.start_state.character_positions.get(char_id)
+                if next_position and next_position != position:
+                    warnings.append(f"{char_id} đổi vị trí mà chưa có diễn biến chuyển tiếp")
+            for prop_id, position in previous.end_state.prop_positions.items():
+                next_position = current.start_state.prop_positions.get(prop_id)
+                if next_position and next_position != position:
+                    warnings.append(f"{prop_id} đổi vị trí giữa hai cảnh")
+        else:
+            # A canonical re-composition may legitimately change what is visible or
+            # where it sits in the frame. Validate physical continuity from the
+            # semantic ledger instead of comparing render-facing descriptions.
+            previous_props = previous.semantic_truth.exit_props
+            current_props = current.semantic_truth.entry_props
+            for prop_id in sorted(set(previous_props) & set(current_props)):
+                before = previous_props[prop_id]
+                after = current_props[prop_id]
+                before_signature = (
+                    before.present,
+                    before.part,
+                    before.owner_id,
+                    before.location_id,
+                    before.container,
+                    before.condition,
+                    before.piece_count,
+                    before.scope,
+                )
+                after_signature = (
+                    after.present,
+                    after.part,
+                    after.owner_id,
+                    after.location_id,
+                    after.container,
+                    after.condition,
+                    after.piece_count,
+                    after.scope,
+                )
+                if before_signature != after_signature:
+                    warnings.append(
+                        f"{prop_id} thay đổi trạng thái vật lý tại biên cảnh mà chưa có "
+                        "diễn biến chuyển tiếp"
+                    )
     if not current.action.strip():
         warnings.append("Cảnh chưa có hành động rõ ràng")
     if current.duration < max(4, round(len(current.voiceover.split()) / 2.8)):

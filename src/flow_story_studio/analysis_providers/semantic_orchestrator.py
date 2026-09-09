@@ -12,7 +12,7 @@ import unicodedata
 from difflib import SequenceMatcher
 
 from ..engines.analyzer import _declared_characters, _declared_props, _heading_locations
-from ..engines.continuity import is_direct_frame_anchor
+from ..engines.continuity import is_direct_continuation, is_direct_frame_anchor
 from ..models import Character, Location, Project, Prop, PropPhysicalState, Scene
 from .source_truth import (
     audit_ai_semantic_proposal,
@@ -391,6 +391,32 @@ def character_presence(scene: Scene, characters: list[Character]) -> list[str]:
     return visible
 
 
+def _character_explicitly_leaves_or_is_nonvisual(scene: Scene, character: Character) -> bool:
+    """Return True only when source evidence authorizes dropping a carried character."""
+    source = _strip_scene_context(scene.source_text)
+    occurrences = _name_occurrences(source, character.name)
+    if occurrences:
+        all_nonvisual = True
+        for start, end in occurrences:
+            window = source[max(0, start - 60) : min(len(source), end + 80)]
+            if not (
+                _mention_is_nonvisual(window, character.name)
+                or _is_communication_only_occurrence(window, character.name)
+            ):
+                all_nonvisual = False
+                break
+        if all_nonvisual:
+            return True
+
+    folded = semantic_key(source)
+    name_key = re.escape(semantic_key(character.name))
+    exit_patterns = (
+        rf"\b{name_key}\b.{{0,48}}\b(?:roi khoi|buoc ra|di ra|roi di|leaves|exits|walks out)\b",
+        rf"\b(?:roi khoi|buoc ra|di ra|leaves|exits)\b.{{0,48}}\b{name_key}\b",
+    )
+    return any(re.search(pattern, folded) for pattern in exit_patterns)
+
+
 def _raw_tokens(value: str) -> list[str]:
     return re.findall(r"[\wÀ-ỹ]+", str(value).casefold(), re.UNICODE)
 
@@ -748,8 +774,23 @@ def normalize_semantic_scene(
         item.character_id for item in scene.dialogues if item.delivery == "onscreen"
     ]
     scene.characters = list(dict.fromkeys([*scene.characters, *onscreen_speakers]))
+
+    # In an authored continuous boundary, physical people do not disappear merely
+    # because the next beat stops naming them. Carry the prior physical cast until
+    # the source explicitly removes, excludes, or demotes them to non-visual media.
+    direct = is_direct_continuation(previous_scene, scene)
+    if direct and previous_scene is not None:
+        by_id = {item.id: item for item in characters}
+        for character_id in previous_scene.characters:
+            character = by_id.get(character_id)
+            if (
+                character is not None
+                and character_id not in scene.characters
+                and not _character_explicitly_leaves_or_is_nonvisual(scene, character)
+            ):
+                scene.characters.append(character_id)
+
     ground_canonical_prop_appearance(scene, props)
-    direct = _is_direct_continuation(previous_scene, scene)
     scene.semantic_truth = compile_scene_semantic_truth(
         scene,
         characters=characters,
@@ -760,13 +801,18 @@ def normalize_semantic_scene(
     )
     audit_ai_semantic_proposal(scene)
     prop_names = {item.id: item.name for item in props}
+    # semantic_truth is the complete physical-world ledger. Legacy
+    # ContinuityState.prop_positions is a visual/render inventory and must contain
+    # only objects actually visible in that boundary frame.
     start_props = {
         prop_id: f"{prop_names.get(prop_id, prop_id)}; {legacy_prop_state(state)}"
         for prop_id, state in scene.semantic_truth.entry_props.items()
+        if state.present and state.visibility == "visible"
     }
     end_props = {
         prop_id: f"{prop_names.get(prop_id, prop_id)}; {legacy_prop_state(state)}"
         for prop_id, state in scene.semantic_truth.exit_props.items()
+        if state.present and state.visibility == "visible"
     }
 
     def merge_part_instances(
@@ -775,6 +821,8 @@ def normalize_semantic_scene(
     ) -> None:
         by_entity: dict[str, list[str]] = {}
         for instance_id, part_state in instances.items():
+            if not part_state.present or part_state.visibility != "visible":
+                continue
             by_entity.setdefault(part_state.entity_id, []).append(
                 f"instance={instance_id}; {legacy_prop_state(part_state)}"
             )
