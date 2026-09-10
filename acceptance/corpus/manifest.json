@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "file": "01-continuous-character-presence.md",
+      "scene_count": 4,
+      "duration": 32,
+      "checks": [
+        {"type": "dependency", "scene": 2, "value": "direct"},
+        {"type": "dependency", "scene": 3, "value": "direct"},
+        {"type": "dependency", "scene": 4, "value": "direct"},
+        {"type": "character_present", "scene": 2, "name": "BAO"},
+        {"type": "character_present", "scene": 3, "name": "BAO"},
+        {"type": "character_absent", "scene": 4, "name": "BAO"}
+      ]
+    },
+    {
+      "file": "02-prop-transfer-and-pocket.md",
+      "scene_count": 3,
+      "duration": 24,
+      "checks": [
+        {"type": "prop_event", "scene": 2, "prop": "Small silver audio recorder", "action": "transfer", "source_owner": "LAN", "target_owner": "MINH"},
+        {"type": "prop_state", "scene": 2, "phase": "exit", "prop": "Small silver audio recorder", "owner": "MINH", "visibility": "visible"},
+        {"type": "prop_event", "scene": 3, "prop": "Small silver audio recorder", "action": "put_away", "target_owner": "MINH"},
+        {"type": "prop_state", "scene": 3, "phase": "exit", "prop": "Small silver audio recorder", "owner": "MINH", "container": "pocket", "visibility": "offscreen"}
+      ]
+    },
+    {
+      "file": "03-ticket-tear-parts.md",
+      "scene_count": 3,
+      "duration": 24,
+      "checks": [
+        {"type": "prop_event", "scene": 2, "prop": "Light blue paper train ticket", "action": "tear", "target_condition": "missing_right_corner"},
+        {"type": "part_present", "scene": 2, "phase": "exit", "prop": "Light blue paper train ticket", "part": "right_corner_fragment"},
+        {"type": "prop_event", "scene": 3, "prop": "Light blue paper train ticket", "action": "tear", "target_condition": "torn_in_two"},
+        {"type": "prop_state", "scene": 3, "phase": "exit", "prop": "Light blue paper train ticket", "condition": "torn_in_two", "piece_count": 2}
+      ]
+    },
+    {
+      "file": "04-flashback-return-present.md",
+      "scene_count": 3,
+      "duration": 24,
+      "checks": [
+        {"type": "temporal", "scene": 2, "timeline_branch": "flashback", "daypart": "afternoon"},
+        {"type": "transition", "scene": 2, "value": "flashback"},
+        {"type": "character_absent", "scene": 2, "name": "MINH"},
+        {"type": "prop_absent", "scene": 2, "prop": "Brass key engraved with number 17"},
+        {"type": "temporal", "scene": 3, "timeline_branch": "present", "daypart": "night"},
+        {"type": "transition", "scene": 3, "value": "return_from_flashback"},
+        {"type": "character_present", "scene": 3, "name": "MINH"},
+        {"type": "character_absent", "scene": 3, "name": "AN"},
+        {"type": "prop_state", "scene": 3, "phase": "entry", "prop": "Brass key engraved with number 17", "owner": "MINH", "visibility": "visible"}
+      ]
+    },
+    {
+      "file": "05-parallel-phone-dialogue.md",
+      "scene_count": 2,
+      "duration": 16,
+      "checks": [
+        {"type": "dialogue_delivery", "scene": 1, "character": "LAN", "delivery": "phone"},
+        {"type": "character_absent", "scene": 1, "name": "LAN"},
+        {"type": "transition", "scene": 2, "value": "parallel"},
+        {"type": "character_present", "scene": 2, "name": "LAN"},
+        {"type": "character_absent", "scene": 2, "name": "MINH"}
+      ]
+    },
+    {
+      "file": "06-same-location-time-jump.md",
+      "scene_count": 2,
+      "duration": 16,
+      "checks": [
+        {"type": "temporal", "scene": 1, "timeline_branch": "present", "daypart": "afternoon"},
+        {"type": "temporal", "scene": 2, "timeline_branch": "present", "daypart": "night"},
+        {"type": "transition", "scene": 2, "value": "time_jump"},
+        {"type": "orchestration_transition", "scene": 2, "value": "time_jump"}
+      ]
+    },
+    {
+      "file": "07-authored-wardrobe-transition.md",
+      "scene_count": 3,
+      "duration": 24,
+      "checks": [
+        {"type": "wardrobe_contains", "scene": 1, "phase": "end", "character": "MINH", "text": "black coat"},
+        {"type": "wardrobe_contains", "scene": 2, "phase": "start", "character": "MINH", "text": "black coat"},
+        {"type": "wardrobe_contains", "scene": 2, "phase": "end", "character": "MINH", "text": "white shirt"},
+        {"type": "wardrobe_excludes", "scene": 2, "phase": "end", "character": "MINH", "text": "black coat"},
+        {"type": "wardrobe_contains", "scene": 3, "phase": "start", "character": "MINH", "text": "white shirt"},
+        {"type": "wardrobe_excludes", "scene": 3, "phase": "start", "character": "MINH", "text": "black coat"}
+      ]
+    },
+    {
+      "file": "08-recorded-voice-cctv-scope.md",
+      "scene_count": 3,
+      "duration": 24,
+      "checks": [
+        {"type": "perceptual_scope", "scene": 1, "entity": "MAYA", "scope": "cctv"},
+        {"type": "perceptual_scope", "scene": 1, "entity": "Red scarf", "scope": "cctv"},
+        {"type": "character_absent", "scene": 1, "name": "MAYA"},
+        {"type": "prop_absent", "scene": 1, "prop": "Red scarf"},
+        {"type": "dialogue_delivery", "scene": 2, "character": "MAYA", "delivery": "recorded"},
+        {"type": "character_absent", "scene": 2, "name": "MAYA"},
+        {"type": "prop_state", "scene": 2, "phase": "entry", "prop": "Small silver recorder", "owner": "ALEX", "visibility": "visible"}
+      ]
+    },
+    {
+      "file": "09-irregular-format-and-inferred-props.md",
+      "min_scene_count": 3,
+      "checks": [
+        {"type": "prop_exists", "prop": "Điện thoại"},
+        {"type": "prop_exists", "prop": "Chiếc túi"},
+        {"type": "prop_event_anywhere", "prop": "Chiếc túi", "action": "place"},
+        {"type": "prop_event_anywhere", "prop": "Điện thoại", "action": "place"},
+        {"type": "prop_event_anywhere", "prop": "Điện thoại", "action": "put_away"}
+      ]
+    },
+    {
+      "file": "10-long-form-50-scenes.md",
+      "scene_count": 50,
+      "duration": 400,
+      "unique_render_prompts": 50,
+      "unique_visual_prompts": 50,
+      "checks": [
+        {"type": "all_scene_gates_pass"},
+        {"type": "location_count", "value": 2}
+      ]
+    }
+  ]
+}
