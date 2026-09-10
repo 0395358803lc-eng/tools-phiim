@@ -54,6 +54,7 @@ SCENE_SCHEMA_VERSION = 3
 TRANSIENT_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 ProgressCallback = Callable[[str, str], None]
 SceneCheckpointCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
+BatchFeedbackCallback = Callable[[int, int, int], None]
 
 
 SYSTEM_PROMPT = """You are a senior film story analyst and continuity supervisor.
@@ -518,8 +519,15 @@ class XKiroClient:
             saved_scenes = {}
             checkpoint["scenes"] = saved_scenes
         previous_end_state: dict[str, Any] | None = None
-        for batch_index, scenes in enumerate(batches, start=1):
+        adaptive_batch_size = batch_size
+        batch_cursor = 0
+
+        while batch_cursor < len(batches):
+            scenes = batches[batch_cursor]
+            batch_index = batch_cursor + 1
             ids = [scene.id for scene in scenes]
+            feedback = {"requested": 0, "initial_valid": 0, "missing": 0}
+
             if all(scene_id in saved_scenes for scene_id in ids):
                 returned = {scene_id: deepcopy(saved_scenes[scene_id]) for scene_id in ids}
                 emit(f"Lô {batch_index}/{len(batches)} đã có checkpoint; bỏ qua")
@@ -542,6 +550,16 @@ class XKiroClient:
                     saved_scenes[scene_id] = deepcopy(value)
                     await self._save_checkpoint(request, checkpoint, [scene_id])
 
+                def record_batch_feedback(
+                    requested: int,
+                    initial_valid: int,
+                    missing: int,
+                    _feedback: dict[str, int] = feedback,
+                ) -> None:
+                    _feedback["requested"] = requested
+                    _feedback["initial_valid"] = initial_valid
+                    _feedback["missing"] = missing
+
                 scene_tokens = min(max_tokens, max(2800, 800 + len(scenes) * 1100))
                 returned = await self._analyze_scene_batch(
                     model,
@@ -555,6 +573,7 @@ class XKiroClient:
                     len(batches),
                     existing,
                     save_scene_checkpoint,
+                    record_batch_feedback,
                 )
                 saved_scenes.update(returned)
                 await self._save_checkpoint(request, checkpoint, ids)
@@ -563,9 +582,40 @@ class XKiroClient:
                     "và lưu checkpoint",
                     "success",
                 )
+
             ordered = [deepcopy(returned[scene.id]) for scene in scenes]
             previous_end_state = self._chain_scene_states(ordered, previous_end_state)
             enriched_scenes.extend(ordered)
+
+            requested = feedback["requested"]
+            missing = feedback["missing"]
+            if (
+                requested > 1
+                and missing >= max(1, (requested + 1) // 2)
+                and adaptive_batch_size > 1
+                and batch_cursor + 1 < len(batches)
+            ):
+                new_batch_size = max(1, adaptive_batch_size // 2)
+                if new_batch_size < adaptive_batch_size:
+                    remaining = [
+                        scene
+                        for future_batch in batches[batch_cursor + 1 :]
+                        for scene in future_batch
+                    ]
+                    batches[batch_cursor + 1 :] = [
+                        remaining[index : index + new_batch_size]
+                        for index in range(0, len(remaining), new_batch_size)
+                    ]
+                    emit(
+                        "Adaptive scene batching: phản hồi đầu chỉ hợp lệ "
+                        f"{feedback['initial_valid']}/{requested}; giảm batch "
+                        f"{adaptive_batch_size}→{new_batch_size} cho phần còn lại",
+                        "warning",
+                    )
+                    adaptive_batch_size = new_batch_size
+
+            batch_cursor += 1
+
         return {**world, "scenes": enriched_scenes}
 
     async def _analyze_scene_batch(
@@ -581,6 +631,7 @@ class XKiroClient:
         batch_count: int,
         existing: dict[str, dict[str, Any]] | None = None,
         checkpoint_scene: SceneCheckpointCallback | None = None,
+        batch_feedback: BatchFeedbackCallback | None = None,
     ) -> dict[str, dict[str, Any]]:
         collected = deepcopy(existing or {})
         structure_attempts = self._env_int("XKIRO_STRUCTURE_REPAIR_ATTEMPTS", 3, 1, 4)
@@ -610,6 +661,12 @@ class XKiroClient:
                     await checkpoint_scene(str(normalized["id"]), normalized)
 
         missing = [scene_id for scene_id in pending_ids if scene_id not in collected]
+        if batch_feedback:
+            batch_feedback(
+                len(pending_ids),
+                len(pending_ids) - len(missing),
+                len(missing),
+            )
         if not missing:
             return collected
         emit(

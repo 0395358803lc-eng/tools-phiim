@@ -50,7 +50,7 @@ def test_direct_boundary_copies_exact_state() -> None:
     assert second.start_state == first.end_state
 
 
-def test_new_entry_state_forces_canonical_reanchor() -> None:
+def test_new_entry_state_preserves_direct_dependency_but_reanchors_visually() -> None:
     project = _project()
     first, second = project.scenes[:2]
     prop_id = project.props[0].id
@@ -59,7 +59,9 @@ def test_new_entry_state_forces_canonical_reanchor() -> None:
 
     project = build_visual_bible(project)
     first, second = project.scenes[:2]
-    assert second.visual_plan.dependency_mode == "canonical"
+    assert second.visual_plan.dependency_mode == "direct"
+    assert second.semantic_truth.frame_anchor == "canonical_master"
+    assert second.image_plan.start_frame_strategy == "canonical_reanchor"
     assert second.start_state.prop_positions != first.end_state.prop_positions
 
 
@@ -115,11 +117,13 @@ def test_authority_resolver_never_overwrites_source_with_creative_value() -> Non
     )
 
 
-def test_dependency_classifier_is_fail_closed() -> None:
+def test_dependency_classifier_uses_authored_transition_not_generated_inventory() -> None:
     project = _project()
     first, second = project.scenes[:2]
     assert classify_dependency(first, second).value == "direct"
     second.characters = []
+    assert classify_dependency(first, second).value == "direct"
+    second.source_text = second.source_text.replace("CONTINUOUS", "LATER")
     assert classify_dependency(first, second).value == "canonical"
 
 
@@ -128,6 +132,17 @@ def test_analyzer_persists_film_model_and_immutable_render_contract() -> None:
     assert project.film_model
     assert project.film_model["hard_gate"]["passed"] is True
     assert project.film_model["scene_intents"]
+    assert project.film_model["analysis_gate"]["passed"] is True
+    assert project.film_model["analysis_gate"]["scene_count"] == len(project.scenes)
+    for item in project.scenes:
+        gate = item.orchestration["analysis_gate"]
+        assert gate["source_truth_pass"] is True
+        assert gate["state_pass"] is True
+        assert gate["boundary_pass"] is True
+        assert gate["semantic_pass"] is True
+        assert gate["orchestration_pass"] is True
+        assert gate["passed"] is True
+        assert gate["blockers"] == []
 
     scene = project.scenes[0]
     assert scene.orchestration

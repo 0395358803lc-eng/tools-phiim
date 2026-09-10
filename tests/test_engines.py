@@ -27,7 +27,13 @@ def test_analysis_builds_complete_continuity_project() -> None:
     assert any(item.name == "Điện thoại" for item in project.props)
     assert project.scenes[0].render_prompt.startswith("SCENE ID: SCENE_001")
     assert "Avoid:" in project.scenes[0].render_prompt
-    assert project.scenes[1].start_state == project.scenes[0].end_state
+    second = project.scenes[1]
+    assert second.visual_plan.dependency_mode == "direct"
+    if second.semantic_truth.frame_anchor == "previous_final_frame":
+        assert second.start_state == project.scenes[0].end_state
+    else:
+        assert second.semantic_truth.frame_anchor == "canonical_master"
+        assert second.image_plan.start_frame_strategy == "canonical_reanchor"
     assert project.continuity_score == 100
     assert all(scene.ai_locked for scene in project.scenes)
 

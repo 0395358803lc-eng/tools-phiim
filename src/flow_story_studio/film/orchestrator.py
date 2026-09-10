@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from ..engines.continuity import is_direct_frame_anchor
 from ..models import Project
 from .audio import scene_audio_locks
 from .bridge import build_canonical_film_model, build_scene_intents
 from .canonical import DependencyMode
 from .contracts import compile_hashed_render_contract, stable_hash
 from .state_delta import derive_scene_state_delta
-from .validation import validate_project_hard_constraints
+from .validation import attach_scene_analysis_gates, validate_project_hard_constraints
 
 
 def prepare_project_orchestration(project: Project) -> Project:
@@ -21,7 +22,8 @@ def prepare_project_orchestration(project: Project) -> Project:
 
     for scene, intent in zip(project.scenes, intents, strict=True):
         mode = intent.dependency_mode
-        if mode == DependencyMode.DIRECT and previous is not None:
+        exact_anchor = previous is not None and is_direct_frame_anchor(previous, scene)
+        if mode == DependencyMode.DIRECT and exact_anchor:
             scene.start_state = deepcopy(previous.end_state)
 
         scene.visual_plan.dependency_mode = (
@@ -165,6 +167,7 @@ def finalize_project_orchestration(project: Project) -> Project:
         }
         for scene in project.scenes
     ]
+    project = attach_scene_analysis_gates(project, verdict)
     if not verdict.is_valid:
         raise ValueError("Film hard-constraint validation failed: " + "; ".join(verdict.errors))
     return project

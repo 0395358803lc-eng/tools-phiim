@@ -245,10 +245,20 @@ The application will verify and deterministically overwrite it.
 For a cut/re-anchor, use the supplied source_start_state as the authoritative physical entry state.
 Do not invent continuity merely to make adjacent shots match.
 
-Return one JSON object with a scenes array. Every scene must contain id, summary, characters,
-location_id, action, camera, lighting, atmosphere, voiceover, dialogues, start_state, end_state and
-semantic_proposal. Each dialogue contains character_id, text and emotion. Each state contains
-character_positions, character_wardrobe, prop_positions, time, weather, camera and notes.
+BATCH COMPLETENESS CONTRACT:
+- The root must be exactly one JSON object containing a scenes array; never return a scene or
+  dialogue object as the root.
+- scenes.length MUST equal {len(scenes)}.
+- The scenes array IDs, in order, MUST be exactly
+  {json.dumps([scene.id for scene in scenes], ensure_ascii=False)}.
+- Never stop after the first scene and never omit a supplied ID. If enrichment is uncertain,
+  preserve the supplied source value for that field and still return the complete scene object.
+- Never return extra scene IDs.
+
+Every returned scene must contain id, summary, characters, location_id, action, camera, lighting,
+atmosphere, voiceover, dialogues, start_state, end_state and semantic_proposal. Each dialogue
+contains character_id, text and emotion. Each state contains character_positions,
+character_wardrobe, prop_positions, time, weather, camera and notes.
 
 SEMANTIC PROPOSAL PROTOCOL:
 semantic_proposal = {{"facts": [...], "negative_facts": [...], "uncertainties": [...]}}. Each fact

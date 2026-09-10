@@ -132,10 +132,18 @@ def make_render_prompt(
     if dependency_mode == "opening":
         continuity = "Opening scene; establish the canonical story world."
     elif dependency_mode == "direct" and previous_scene_id:
-        continuity = (
-            f"Direct continuation of {previous_scene_id}; begin from that scene's accepted "
-            "final frame and preserve physical state."
-        )
+        if scene.semantic_truth.frame_anchor == "previous_final_frame":
+            continuity = (
+                f"Direct continuation of {previous_scene_id}; begin from that scene's accepted "
+                "final frame and preserve physical state exactly."
+            )
+        else:
+            continuity = (
+                f"Direct continuation of {previous_scene_id}; preserve narrative, temporal, "
+                "identity and object continuity, but the authored entry beat requires a new "
+                "composition/state reveal. Re-anchor from canonical masters and source truth; "
+                "do not fabricate an exact previous-frame bridge."
+            )
     else:
         continuity = (
             "Canonical cut/new beat; re-anchor to this scene's source truth and canonical "

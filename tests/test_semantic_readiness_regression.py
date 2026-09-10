@@ -539,3 +539,69 @@ Minh lấy phần vé xanh bị thiếu góc phải ra khỏi túi.
         for event in key_scene.semantic_truth.prop_events
     )
     assert ticket_scene.semantic_truth.entry_props[ticket.id].condition == "missing_right_corner"
+
+def test_owned_prop_persists_offscreen_across_location_cut():
+    script = """
+NHÂN VẬT
+- KHẢI, nam, 35 tuổi.
+ĐẠO CỤ
+- Máy ghi âm nhỏ màu bạc.
+
+CẢNH 1 — SÂN GA — ĐÊM
+Khải nhặt máy ghi âm nhỏ màu bạc lên. Khải bỏ máy ghi âm vào túi áo.
+
+CẢNH 2 — SẢNH NHÀ GA — ĐÊM
+Khải bước vào sảnh và nhìn quanh.
+"""
+    project = analyze_story(AnalyzeRequest(name="owned prop persistence", original_text=script))
+    recorder = next(item for item in project.props if "ghi âm" in item.name.casefold())
+    destination = project.scenes[-1]
+    assert recorder.id in destination.semantic_truth.entry_props
+    state = destination.semantic_truth.entry_props[recorder.id]
+    assert state.owner_id in destination.characters
+    assert state.container == "pocket"
+    assert state.visibility == "offscreen"
+
+def test_continuous_scene_carries_unmentioned_character_until_source_excludes_them():
+    script = """
+NHÂN VẬT
+- ALEX, adult man.
+- BEN, adult man.
+
+SCENE 1 — ROOM — NIGHT
+Alex and Ben stand beside the table.
+
+SCENE 2 — ROOM — NIGHT — CONTINUOUS
+Alex looks at the door.
+
+SCENE 3 — ROOM — NIGHT — CONTINUOUS
+Ben is not present. Alex remains beside the table.
+"""
+    project = analyze_story(
+        AnalyzeRequest(name="continuous cast persistence", original_text=script)
+    )
+    first, second, third = project.scenes
+    assert set(second.characters) == set(first.characters)
+    ben = next(item for item in project.characters if item.name.casefold() == "ben")
+    assert ben.id not in third.characters
+
+def test_semantic_readiness_blocks_authored_direct_dependency_downgrade():
+    from flow_story_studio.semantic_readiness import evaluate_semantic_readiness
+
+    script = """
+NHÂN VẬT
+- ALEX, adult man.
+
+SCENE 1 — ROOM — NIGHT
+Alex stands beside the table.
+
+SCENE 2 — ROOM — NIGHT — CONTINUOUS
+Alex remains beside the table.
+"""
+    project = analyze_story(AnalyzeRequest(name="dependency readiness", original_text=script))
+    second = project.scenes[1]
+    assert second.visual_plan.dependency_mode == "direct"
+    second.visual_plan.dependency_mode = "canonical"
+    report = evaluate_semantic_readiness(project)
+    assert report.status == "Blocked"
+    assert any("dependency_alignment" in item for item in report.blockers)

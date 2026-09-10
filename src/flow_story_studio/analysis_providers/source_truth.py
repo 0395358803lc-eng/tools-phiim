@@ -567,18 +567,29 @@ def _surface_location(text: str, scene_location_id: str) -> str:
             "counter",
         ),
         (
-            ("tren ban", "len ban", "mat ban", "on the table", "onto the table"),
+            (
+                "tren ban",
+                "len ban",
+                "xuong ban",
+                "mat ban",
+                "on the table",
+                "onto the table",
+                "down on the table",
+            ),
             "table",
         ),
         (
             (
                 "tren ghe",
+                "len ghe",
                 "tren chiec ghe",
                 "ghe kim loai",
                 "lung ghe",
                 "tren lung ghe",
                 "on the chair",
+                "onto the chair",
                 "on the bench",
+                "onto the bench",
                 "chair back",
             ),
             "seat",
@@ -1233,9 +1244,32 @@ def compile_prop_lifecycle(
             }
         )
 
+    if prior_props:
+        visible_characters = set(scene.characters)
+        for prop_id, prior_state in prior_props.items():
+            if prop_id in entry or not prior_state.present:
+                continue
+            if prior_state.owner_id and prior_state.owner_id in visible_characters:
+                carried = prior_state.model_copy(deep=True)
+                carried.location_id = scene.location_id
+                carried.visibility = "offscreen"
+                entry[prop_id] = carried
+
     for prop in props:
         fragment_mentions = _fragment_mentions(scene, prop)
         whole_mentioned = prop_whole_physically_mentioned(scene, prop)
+
+        # A carried object remains physically real across the boundary, but it is
+        # not automatically visible in the new shot. Current-scene source evidence
+        # or an authored event must bring it back into the visible composition.
+        carried_state = entry.get(prop.id)
+        if (
+            carried_state is not None
+            and not whole_mentioned
+            and not fragment_mentions
+            and prop.id not in by_prop_events
+        ):
+            carried_state.visibility = "offscreen"
 
         if prop_explicitly_absent(scene, prop) and not fragment_mentions:
             entry.pop(prop.id, None)

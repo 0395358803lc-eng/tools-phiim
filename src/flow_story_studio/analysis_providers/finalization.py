@@ -14,7 +14,11 @@ from ..engines.continuity import check_project, is_direct_continuation
 from ..engines.prompt_generator import make_render_prompt, make_visual_prompt
 from ..film import orchestrator as film_orchestrator
 from ..film.beat_integrity import restore_ai_duplicate_beats
-from ..film.validation import assert_project_hard_constraints
+from ..film.validation import (
+    assert_project_hard_constraints,
+    attach_scene_analysis_gates,
+    validate_project_hard_constraints,
+)
 from ..models import Character, ContinuityState, Location, Project, Prop
 from ..scene_contracts import seal_project_contracts
 from ..semantic_readiness import refresh_semantic_readiness
@@ -448,6 +452,7 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     # Build orchestration from the exact final semantic state, then compile prompts.
     project = film_orchestrator.prepare(project)
     project = build_visual_bible(project)
+    project = refresh_semantic_readiness(project)
     for index, scene in enumerate(project.scenes):
         visible = set(scene.characters)
         location = next(item for item in project.locations if item.id == scene.location_id)
@@ -483,6 +488,16 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
     project.film_model["semantic_readiness"] = project.semantic_readiness.model_dump(mode="json")
     project.film_model["continuity_score"] = project.continuity_score
     project.film_model["continuity_warnings"] = list(project.continuity_warnings)
+
+    # Recompute the published Hard Gate from the exact final state. This prevents
+    # stale "passed=True" metadata when post-orchestration readiness discovers a blocker.
+    final_verdict = validate_project_hard_constraints(project)
+    project.film_model["hard_gate"] = {
+        "passed": final_verdict.is_valid,
+        "errors": list(final_verdict.errors),
+        "warnings": list(final_verdict.warnings),
+    }
+    project = attach_scene_analysis_gates(project, final_verdict)
 
     assert_project_hard_constraints(project)
     return seal_project_contracts(project)
