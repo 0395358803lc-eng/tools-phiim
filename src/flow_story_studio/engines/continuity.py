@@ -24,6 +24,15 @@ def is_direct_continuation(previous: Scene | None, current: Scene) -> bool:
     if previous.location_id != current.location_id:
         return False
 
+    if current.semantic_truth.narrative_transition in {
+        "flashback",
+        "return_from_flashback",
+        "parallel",
+        "time_jump",
+        "location_transition",
+    }:
+        return False
+
     current_context = _scene_context(current.source_text)
     if not current_context:
         return True
@@ -47,9 +56,15 @@ def is_direct_frame_anchor(previous: Scene | None, current: Scene) -> bool:
     after = current.start_state
     before_chars = set(previous.characters)
     after_chars = set(current.characters)
-    before_props = set(before.prop_positions)
-    after_props = set(after.prop_positions)
-    return before_chars == after_chars and before_props == after_props
+    if before_chars != after_chars:
+        return False
+    return (
+        before.character_positions == after.character_positions
+        and before.character_wardrobe == after.character_wardrobe
+        and before.prop_positions == after.prop_positions
+        and before.time == after.time
+        and before.weather == after.weather
+    )
 
 
 def sanitize_visual_state_scope(project: Project) -> Project:

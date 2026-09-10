@@ -362,6 +362,10 @@ def _mention_is_nonvisual(window: str, name: str) -> bool:
         rf"(?:man\s+hinh\s+hien|caller\s+id|incoming\s+call).{0, 12}{escaped_key}\b",
         rf"{escaped_key}\s+(?:dang\s+goi|is\s+calling|calling)\b",
         rf"(?:tin\s+nhan\s+tu|message\s+from|text\s+from)\s+{escaped_key}\b",
+        rf"(?:old\s+)?cctv\s+footage\b.{{0,50}}{escaped_key}\b",
+        rf"security\s+footage\b.{{0,50}}{escaped_key}\b",
+        rf"{escaped_key}\b.{{0,40}}(?:on|in)\s+(?:the\s+)?(?:old\s+)?cctv\s+footage\b",
+        rf"{escaped_key}\b.{{0,40}}(?:on|in)\s+(?:the\s+)?security\s+footage\b",
     )
     return any(re.search(pattern, folded) for pattern in nonvisual_patterns)
 

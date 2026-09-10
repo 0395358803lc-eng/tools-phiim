@@ -31,6 +31,10 @@ _PERCEPTUAL_MARKERS: tuple[tuple[str, str], ...] = (
     ("trong footage cũ", "cctv"),
     ("in the security footage", "cctv"),
     ("in the footage", "cctv"),
+    ("on the old cctv footage", "cctv"),
+    ("on the cctv footage", "cctv"),
+    ("old cctv footage", "cctv"),
+    ("cctv footage", "cctv"),
     ("security footage", "cctv"),
     ("trong video", "screen"),
     ("video cu", "screen"),
@@ -397,6 +401,9 @@ _NEGATIVE_PROP_MARKERS = (
     "doesnt carry",
     "is not here",
     "not here",
+    "is not present",
+    "not present",
+    "not physically present",
     "without",
 )
 
@@ -940,7 +947,10 @@ def extract_prop_events(
                         evidence=sentence,
                     )
                 )
-            elif "xe" in folded and any(x in folded for x in ("goc", "corner")):
+            elif (
+                ("xe" in folded or re.search(r"\b(?:tear|tears|rip|rips)\b", folded))
+                and any(x in folded for x in ("goc", "corner"))
+            ):
                 events.append(
                     PropEvent(
                         entity_id=prop.id,
@@ -1019,8 +1029,14 @@ def extract_prop_events(
 
             put_away = (
                 ("cất" in raw_sentence or "bỏ" in raw_sentence)
-                or any(x in folded for x in ("put away", "puts away", "tuck", "tucks"))
-            ) and any(x in folded for x in ("vao tui", "into pocket", "in pocket"))
+                or any(
+                    x in folded
+                    for x in ("put away", "puts away", "tuck", "tucks", "put", "puts")
+                )
+            ) and (
+                "vao tui" in folded
+                or "pocket" in folded
+            )
             if put_away:
                 events.append(
                     PropEvent(
@@ -1146,18 +1162,37 @@ def _base_prop_state(
         pieces = 1
     owner = _infer_owner(evidence_text, prop, [c for c in characters if c.id in scene.characters])
     location_id = _surface_location(evidence_text, scene.location_id)
+    folded = key(evidence_text)
     if location_id != scene.location_id and not any(
-        marker in key(evidence_text) for marker in ("cam", "giu", "hold", "holds", "carrying")
+        marker in folded for marker in ("cam", "giu", "hold", "holds", "carrying")
     ):
         owner = ""
+
+    in_pocket = any(
+        marker in folded
+        for marker in (
+            "trong tui",
+            "trong tui ao",
+            "o trong tui",
+            "nam trong tui",
+            "in pocket",
+            "in his pocket",
+            "in her pocket",
+            "inside pocket",
+            "inside his pocket",
+            "inside her pocket",
+            "coat pocket",
+        )
+    )
     return PropPhysicalState(
         entity_id=prop.id,
         part=part,
         owner_id=owner,
         location_id=location_id,
+        container="pocket" if in_pocket else "",
         condition=condition,
         piece_count=pieces,
-        visibility="visible",
+        visibility="offscreen" if in_pocket else "visible",
         scope="physical_world",
     )
 
@@ -1355,12 +1390,29 @@ def compile_prop_lifecycle(
                 evidence_text=entry_evidence or prop.name,
             )
 
+        # Across a non-direct cut/time branch, the current authored beat becomes
+        # authoritative for presentation. A persistent prior object may have been
+        # off-screen previously, but an explicit current mention such as "in his hand"
+        # must promote it back into the visible composition.
+        if seeded_from_prior and not direct_continuation and whole_mentioned:
+            observed = _base_prop_state(
+                scene,
+                prop,
+                characters=characters,
+                evidence_text=entry_evidence or physical,
+            )
+            state.visibility = observed.visibility
+            state.location_id = observed.location_id or scene.location_id
+            if observed.owner_id:
+                state.owner_id = observed.owner_id
+                state.container = observed.container
+
         owner_claim = _explicit_owner_claim(
             entry_evidence,
             prop,
             [c for c in characters if c.id in scene.characters],
         )
-        if owner_claim and not seeded_from_prior:
+        if owner_claim and (not seeded_from_prior or not direct_continuation):
             state.owner_id = owner_claim
             state.location_id = scene.location_id
             state.container = ""
@@ -1605,16 +1657,75 @@ def narrative_transition(previous_scene: Scene | None, scene: Scene) -> str:
     context = key(scene_context(scene))
     if previous_scene is None:
         return "opening"
+
+    previous_context = key(scene_context(previous_scene))
+    previous_temporal = temporal_state(previous_scene)
+    current_temporal = temporal_state(scene)
+
     if "song song" in context or "parallel" in context:
         return "parallel"
-    if "flashback" in context and "flashback" not in key(scene_context(previous_scene)):
-        return "flashback"
-    if any(x in context for x in ("tro lai hien tai", "return to present")):
+
+    returning_to_present = (
+        previous_temporal.timeline_branch == "flashback"
+        and current_temporal.timeline_branch == "present"
+    ) or any(
+        marker in context
+        for marker in (
+            "tro lai hien tai",
+            "return to present",
+            "back to present",
+            "present again",
+        )
+    )
+    if returning_to_present:
         return "return_from_flashback"
+
+    if "flashback" in context and "flashback" not in previous_context:
+        return "flashback"
+
     if any(x in context for x in ("lien tuc", "continuous")):
         if previous_scene.location_id != scene.location_id:
             return "location_transition"
         return "continuous"
+
+    same_timeline = (
+        previous_temporal.timeline_branch == current_temporal.timeline_branch
+    )
+    explicit_dayparts = (
+        previous_temporal.daypart != "source-defined time"
+        and current_temporal.daypart != "source-defined time"
+    )
+    explicit_clock_jump = (
+        bool(previous_temporal.scene_clock)
+        and bool(current_temporal.scene_clock)
+        and previous_temporal.scene_clock != current_temporal.scene_clock
+    )
+    explicit_daypart_jump = (
+        explicit_dayparts
+        and previous_temporal.daypart != current_temporal.daypart
+    )
+    explicit_jump_marker = any(
+        marker in context
+        for marker in (
+            "later",
+            "hours later",
+            "minutes later",
+            "next day",
+            "next morning",
+            "next night",
+            "sau do",
+            "sau mot luc",
+            "sau vai gio",
+            "ngay hom sau",
+        )
+    )
+    if (
+        previous_scene.location_id == scene.location_id
+        and same_timeline
+        and (explicit_clock_jump or explicit_daypart_jump or explicit_jump_marker)
+    ):
+        return "time_jump"
+
     if previous_scene.location_id != scene.location_id:
         return "location_transition"
     return "cut"

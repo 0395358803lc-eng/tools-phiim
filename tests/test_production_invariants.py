@@ -123,7 +123,10 @@ def test_merge_enforces_canonical_visual_and_prop_invariants() -> None:
     assert "two-shot" not in remote.camera.casefold()
     assert maya.id not in remote.start_state.character_positions
     assert set(remote.start_state.prop_positions) == {key.id}
-    assert set(remote.end_state.prop_positions) == {key.id}
+    assert remote.end_state.prop_positions == {}
+    assert key.id in remote.semantic_truth.exit_props
+    assert remote.semantic_truth.exit_props[key.id].container == "pocket"
+    assert remote.semantic_truth.exit_props[key.id].visibility == "offscreen"
 
     assert hallway.characters == [alex.id]
     assert hallway.start_state.prop_positions == {}

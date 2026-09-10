@@ -32,6 +32,7 @@ from .semantic_orchestrator import (
 from .source_truth import (
     canonicalize_location_aliases,
     enrich_location_spatial_anchors,
+    physical_source_text,
     temporal_state,
 )
 
@@ -40,6 +41,155 @@ def _key(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", str(value).casefold().replace("đ", "d"))
     ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     return " ".join(re.findall(r"[a-z0-9]+", ascii_text))
+
+
+def _clean_wardrobe_phrase(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip(" .,:;-"))
+    cleaned = re.sub(
+        r"^(?:the|a|an|his|her|their|chiếc|cái)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
+
+
+def _wardrobe_source_sentences(scene, character: Character) -> list[str]:
+    source = physical_source_text(scene)
+    sentences = [
+        item.strip()
+        for item in re.split(r"(?<=[.!?])\s+|\n+", source)
+        if item.strip()
+    ]
+    if len(scene.characters) == 1 and character.id in scene.characters:
+        return sentences
+
+    name_key = _key(character.name)
+    return [
+        sentence
+        for sentence in sentences
+        if name_key
+        and re.search(
+            rf"(?<![a-z0-9]){re.escape(name_key)}(?![a-z0-9])",
+            _key(sentence),
+        )
+    ]
+
+
+def _explicit_wardrobe_phrase(scene, character: Character) -> str:
+    candidates = _wardrobe_source_sentences(scene, character)
+    patterns = (
+        r"\bwearing\s+only\s+([^.;]+)",
+        r"\bwearing\s+([^.;]+)",
+        r"\bwears\s+([^.;]+)",
+        r"\b(?:chỉ\s+mặc|chi\s+mac)\s+([^.;]+)",
+        r"\b(?:đang\s+mặc|dang\s+mac|mặc|mac)\s+([^.;]+)",
+    )
+    for sentence in reversed(candidates):
+        for pattern in patterns:
+            match = re.search(pattern, sentence, re.IGNORECASE)
+            if match:
+                return _clean_wardrobe_phrase(match.group(1))
+    return ""
+
+
+def _wardrobe_change_action(scene, character: Character) -> bool:
+    source = " ".join(_wardrobe_source_sentences(scene, character))
+    folded = _key(source)
+    return any(
+        marker in folded
+        for marker in (
+            "remove",
+            "removes",
+            "take off",
+            "takes off",
+            "put on",
+            "puts on",
+            "change into",
+            "changes into",
+            "coi",
+            "thao",
+            "mac vao",
+            "thay do",
+        )
+    )
+
+
+def _removed_wardrobe_phrase(scene, character: Character) -> str:
+    source = " ".join(_wardrobe_source_sentences(scene, character))
+    patterns = (
+        (
+            r"\b(?:remove|removes|take off|takes off)\s+"
+            r"(?:the\s+|his\s+|her\s+)?([^.,;]+?)(?:\s+and\b|[.,;]|$)"
+        ),
+        r"\b(?:cởi|coi|tháo|thao)\s+([^.,;]+?)(?:\s+(?:và|va|rồi|roi)\b|[.,;]|$)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if match:
+            return _clean_wardrobe_phrase(match.group(1))
+    return ""
+
+
+def _remove_wardrobe_item(prior: str, removed: str) -> str:
+    if not prior or not removed:
+        return prior
+    prior_key = _key(prior)
+    removed_key = _key(removed)
+    if removed_key not in prior_key:
+        return prior
+
+    if " over " in prior.casefold():
+        left, right = re.split(r"\s+over\s+", prior, maxsplit=1, flags=re.IGNORECASE)
+        if removed_key in _key(left):
+            return _clean_wardrobe_phrase(right)
+
+    pattern = re.compile(re.escape(removed), re.IGNORECASE)
+    cleaned = pattern.sub("", prior, count=1)
+    cleaned = re.sub(r"\b(?:over|under|with)\b\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;-")
+    return _clean_wardrobe_phrase(cleaned) or prior
+
+
+def _ground_wardrobe_state(
+    scene,
+    *,
+    characters: list[Character],
+    wardrobe_ledgers: dict[str, dict[str, str]],
+) -> None:
+    branch = temporal_state(scene).timeline_branch
+    ledger = wardrobe_ledgers.setdefault(branch, {})
+    by_id = {item.id: item for item in characters}
+
+    start: dict[str, str] = {}
+    end: dict[str, str] = {}
+    for character_id in scene.characters:
+        character = by_id.get(character_id)
+        if character is None:
+            continue
+
+        prior = ledger.get(character_id) or character.clothing
+        explicit = _explicit_wardrobe_phrase(scene, character)
+        changed = _wardrobe_change_action(scene, character)
+        removed = _removed_wardrobe_phrase(scene, character)
+
+        if explicit:
+            if changed:
+                start_value = prior
+                end_value = explicit
+            else:
+                start_value = explicit
+                end_value = explicit
+        else:
+            start_value = prior
+            end_value = _remove_wardrobe_item(prior, removed) if removed else prior
+
+        start[character_id] = start_value
+        end[character_id] = end_value
+        ledger[character_id] = end_value
+
+    scene.start_state.character_wardrobe = start
+    scene.end_state.character_wardrobe = end
 
 
 def _canonicalize_entities(items: list[Character] | list[Location] | list[Prop]):
@@ -404,6 +554,7 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
         {scene.id: scene for scene in source_project.scenes} if source_project is not None else {}
     )
     previous_scene = None
+    wardrobe_ledgers: dict[str, dict[str, str]] = {}
     for scene in project.scenes:
         visible = set(scene.characters)
         scene.start_state = _remap_state(
@@ -426,6 +577,11 @@ def finalize_project(project: Project, source_project: Project | None = None) ->
             previous_scene=previous_scene,
             characters=project.characters,
             locations=project.locations,
+        )
+        _ground_wardrobe_state(
+            scene,
+            characters=project.characters,
+            wardrobe_ledgers=wardrobe_ledgers,
         )
         previous_scene = scene
 

@@ -9,6 +9,15 @@ from .canonical import DependencyMode
 def classify_dependency(previous: Scene | None, current: Scene) -> DependencyMode:
     if previous is None:
         return DependencyMode.OPENING
+
+    transition = current.semantic_truth.narrative_transition
+    if transition == "parallel":
+        return DependencyMode.PARALLEL
+    if transition == "flashback":
+        return DependencyMode.FLASHBACK
+    if transition in {"time_jump", "return_from_flashback"}:
+        return DependencyMode.TIME_JUMP
+
     if previous.location_id != current.location_id:
         return DependencyMode.LOCATION_TRANSITION
 
